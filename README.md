@@ -1,5 +1,3 @@
-# BugScrub
-
 <p align="center">
   <img src="./docs/bugscrub_logo.png" width="300" alt="BugScrub logo">
 </p>

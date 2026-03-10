@@ -1,0 +1,44 @@
+{
+  "name": "bugscrub",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Schema-driven CLI for exploratory bug scrub workflows.",
+  "type": "module",
+  "bin": {
+    "bugscrub": "./dist/index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "commit": "cz",
+    "commitlint": "commitlint",
+    "dev": "tsx src/index.ts",
+    "prepare": "husky",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "config": {
+    "commitizen": {
+      "path": "cz-conventional-changelog"
+    }
+  },
+  "dependencies": {
+    "chalk": "^5.0.0",
+    "commander": "^14.0.0",
+    "yaml": "^2.0.0"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.0.0",
+    "@commitlint/config-conventional": "^20.0.0",
+    "@types/node": "^22.0.0",
+    "commitizen": "^4.3.1",
+    "cz-conventional-changelog": "^3.3.0",
+    "husky": "^9.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.0.0"
+  }
+}

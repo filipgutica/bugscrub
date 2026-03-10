@@ -1,0 +1,5 @@
+{
+  "name": "plain-node-app",
+  "private": true,
+  "type": "module"
+}

@@ -35,17 +35,17 @@ exploration:
 
 ## Command Lifecycle
 
-> `init` bootstraps BugScrub in a repo. `generate` creates new workflow drafts over time as features, diffs, routes, and tests evolve.
+> `init` bootstraps BugScrub in a repo and hands repo-specific authoring off to the agent. `generate` creates new workflow drafts over time as features, diffs, routes, and tests evolve.
 
 ```
-init once        → scaffold .bugscrub/ from an existing codebase
+init once        → scaffold minimal .bugscrub/ bootstrap + agent handoff from an existing codebase
 generate often   → create or update workflow drafts from a source (diff, tests, route, workflow)
 run often        → execute workflows against an agent
 validate always  → validate all .bugscrub/ configs (CI gate)
 schema           → print JSON schemas for inspection/debugging
 ```
 
-`init` is a one-time bootstrap. `generate` is the day-2+ workflow authoring tool.
+`init` is a one-time bootstrap that writes config, directories, and an agent handoff. Repo-specific surfaces and workflows are authored after bootstrap. `generate` is the day-2+ workflow authoring tool.
 
 ---
 
@@ -60,7 +60,7 @@ schema           → print JSON schemas for inspection/debugging
 | YAML | yaml 2.x (not js-yaml) | Better types, ESM-native, bidirectional |
 | Subprocess | execa 9.x | Streaming stdout/stderr, typed results |
 | CLI UX | @inquirer/prompts 8.x + chalk 5.x + ora 9.x | Modern ESM-only, modular |
-| Globbing | glob 13.x | For init scanning |
+| Globbing | glob 13.x | For later generation/discovery workflows if needed |
 | Tests | Vitest 4.x | Fast, native ESM |
 | Dev | tsx 4.x + prettier 3.x + @typescript-eslint 8.x | Standard |
 
@@ -97,10 +97,10 @@ src/
     resolver.ts               # resolve surface + capability/assertion/signal refs in a workflow
   init/
     detector.ts               # workspace/framework/test runner detection
-    scanner.ts                # glob source files, extract routes/elements/tests
-    inferrer.ts               # scan results → scaffold objects (routes + tests only in v0)
-    scaffolder.ts             # write .bugscrub/ directory tree
-    summary.ts                # render init summary to stdout + write .bugscrub/init-report.md
+    context.ts                # lightweight repo context collection for the agent handoff
+    bootstrap.ts              # minimal config seeding (project/baseUrl defaults only)
+    scaffolder.ts             # write .bugscrub/ bootstrap files and directories
+    summary.ts                # render init summary to stdout + write init-report/agent-handoff
   generate/
     diff.ts                   # --from-diff: parse git diff → touched routes/surfaces
     tests.ts                  # --from-tests: scan test names/routes → capability seeds
@@ -428,15 +428,12 @@ agent:
 ```
 .bugscrub/
   bugscrub.config.yaml
-  init-report.md                # written by `bugscrub init`; describes what was inferred
+  init-report.md                # written by `bugscrub init`; describes detected context and next steps
+  agent-handoff.md              # deterministic prompt/context for the agent to finish authoring repo files
   workflows/
-    api-requests-exploration.yaml
+    # intentionally empty after init bootstrap; populated by the agent or generate
   surfaces/
-    api_requests/
-      surface.yaml
-      capabilities.yaml         # all caps for this surface in one file
-      assertions.yaml           # named repo-defined assertions for this surface
-      signals.yaml              # named repo-defined signals for this surface
+    # intentionally empty after init bootstrap; populated by the agent
   reports/                      # populated on run
 ```
 
@@ -532,6 +529,8 @@ bugscrub schema workflow          # print JSON Schema for WorkflowConfig
 ```
 
 Runtime validation uses BugScrub's internal Zod schemas directly. For editor tooling, BugScrub ships JSON Schema artifacts with the installed CLI package; `bugscrub init` may optionally write repo-local editor settings that point at those installed schema files.
+
+For v0, `init` intentionally avoids deep route/test/capability inference. The CLI should stay thin and deterministic, while the agent does the repo-specific authoring work once the bootstrap files exist.
 
 ---
 
@@ -730,18 +729,19 @@ Markdown report sections:
 - **Milestone**: `bugscrub validate` and `bugscrub schema workflow` work; broken capability/assertion refs caught at validate time; CI gate is meaningful; packaged schema artifacts are available for editor integration
 
 ### Phase 2 — Init Command (Days 4-7)
-- `src/init/detector.ts`, `scanner.ts`, `inferrer.ts`, `scaffolder.ts`, `summary.ts`
-- `src/commands/init.ts` (fully working pipeline with interactive prompts)
+- `src/init/detector.ts`, `context.ts`, `bootstrap.ts`, `scaffolder.ts`, `summary.ts`
+- `src/commands/init.ts` (bootstrap + interactive package selection)
   - Errors if `.bugscrub/` already exists; pass `--force` to overwrite
-  - No framework detected → warn + generate minimal stub scaffold with TODO markers
-  - pnpm workspace → prompt user to select a package before scanning
-  - Scanner picks up `data-testid` attributes only (`data-cy`, `data-pw` not included in v0)
+  - Detects only lightweight repo context (workspace, framework, test runner, representative files)
+  - Seeds a minimal valid `.bugscrub/bugscrub.config.yaml`
+  - Leaves `.bugscrub/workflows/` and `.bugscrub/surfaces/` empty for the agent to author
+  - pnpm workspace → prompt user to select a package before bootstrapping
   - Optional `--editor vscode` writes `.vscode/settings.json` YAML associations pointing at the installed BugScrub schema artifact paths
-  - Writes `.bugscrub/init-report.md` and prints summary to stdout on completion
+  - Writes `.bugscrub/init-report.md`, `.bugscrub/agent-handoff.md`, and prints summary to stdout on completion
 - Fixture repos in `tests/fixtures/repos/`
-- Integration test: init against simple-nextjs fixture, assert file tree
+- Integration test: init against simple-nextjs fixture, assert bootstrap files and empty authored directories
 - Manual smoke target: `sandbox/vue-rbac-app`
-- **Milestone**: `bugscrub init` generates useful scaffold in a real repo
+- **Milestone**: `bugscrub init` produces a valid minimal bootstrap and hands repo-specific authoring to the agent
 
 ### Phase 3 — Run Command (Days 8-12)
 - `src/runner/agent/types.ts` — `AgentAdapter`, `AgentCapabilities`, `RunContext`, `RunResult` — **implement first**
@@ -776,7 +776,7 @@ Markdown report sections:
 4. `src/runner/negotiator.ts` — Capability negotiation; fail-fast before spending agent budget
 5. `src/runner/agent/claude.ts` — Claude adapter: prompt construction + JSONL stream → `RunResult`; most complex adapter implementation
 6. `src/core/paths.ts` — Defines the repo/global boundary and resolves installed schema artifact paths for editor integration; get this wrong and config ergonomics degrade everywhere
-7. `src/init/inferrer.ts` — Most logic-dense init module; inference quality determines scaffold usefulness
+7. `src/init/context.ts` — keep this shallow; avoid rebuilding app-specific understanding inside the CLI
 
 ---
 
@@ -801,7 +801,7 @@ All error messages go to `stderr` in human-readable format. No structured JSON e
 5. `bugscrub schema workflow` — Valid JSON Schema output
 6. Published/build artifacts include packaged JSON Schema files under `schemas-json/`
 7. `bugscrub validate` — Validates fixture workflows
-8. `bugscrub init` in a Next.js repo — Produces correct `.bugscrub/` structure
+8. `bugscrub init` in a Next.js repo — Produces minimal `.bugscrub/` bootstrap plus agent handoff
 9. `bugscrub init --editor vscode` — Writes working YAML schema associations to `.vscode/settings.json`
 10. `bugscrub generate --from-route /checkout --dry-run` — Prints draft workflow YAML without writing
 11. `bugscrub generate --from-diff` — Produces a draft workflow for changed surfaces (manual test in real repo)

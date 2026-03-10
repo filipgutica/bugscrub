@@ -17,6 +17,8 @@
     "dev": "node --import tsx src/index.ts",
     "generate:schemas": "node --import tsx scripts/generate-schemas.ts",
     "prepare": "husky",
+    "smoke:init": "node --import tsx scripts/smoke-init.ts",
+    "test:integration": "vitest run tests/integration",
     "test": "vitest run",
     "test:open": "vitest --ui --open",
     "test:watch": "vitest",

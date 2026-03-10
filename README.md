@@ -1,5 +1,19 @@
 # BugScrub
 
+<p align="center">
+  <img src="./docs/bugscrub_logo.png" width="300" alt="BugScrub logo">
+</p>
+
+<h1 align="center">BugScrub</h1>
+
+<p align="center">
+Schema-driven exploratory bug scrubbing for web apps and APIs.
+</p>
+
+<p align="center">
+<code>init</code> · <code>generate</code> · <code>run</code> · <code>validate</code>
+</p>
+
 BugScrub is a schema-driven CLI for running capability-bounded exploratory bug scrub workflows against web applications and APIs.
 
 It is built for teams that already have solid automated test coverage, but still rely on manual bug scrubs or bug bashes to find edge cases, workflow issues, and UX gaps that deterministic tests miss.

@@ -11,12 +11,14 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "pnpm generate:schemas && tsc -p tsconfig.json",
     "commit": "cz",
     "commitlint": "commitlint",
-    "dev": "tsx src/index.ts",
+    "dev": "node --import tsx src/index.ts",
+    "generate:schemas": "node --import tsx scripts/generate-schemas.ts",
     "prepare": "husky",
     "test": "vitest run",
+    "test:open": "vitest --ui --open",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
@@ -28,12 +30,15 @@
   "dependencies": {
     "chalk": "^5.0.0",
     "commander": "^14.0.0",
-    "yaml": "^2.0.0"
+    "yaml": "^2.0.0",
+    "zod": "^4.1.12",
+    "zod-to-json-schema": "^3.24.6"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.0.0",
     "@commitlint/config-conventional": "^20.0.0",
     "@types/node": "^22.0.0",
+    "@vitest/ui": "^4.0.18",
     "commitizen": "^4.3.1",
     "cz-conventional-changelog": "^3.3.0",
     "husky": "^9.0.0",

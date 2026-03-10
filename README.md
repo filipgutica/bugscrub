@@ -60,7 +60,7 @@ bugscrub schema
 - `validate` checks config and workflow files against schemas.
 - `generate` drafts workflows from diffs, tests, routes, or existing workflows.
 - `run` executes a workflow through a compatible agent adapter.
-- `schema` prints or exports JSON Schemas for editor tooling and validation.
+- `schema` prints JSON Schemas for inspection and debugging.
 
 ## Repo Layout
 
@@ -72,10 +72,17 @@ Planned project structure:
   workflows/
   surfaces/
   reports/
-  generated/
 ```
 
-Workflows reference named surfaces and capabilities defined in the repo, which keeps exploration controlled and repeatable.
+Workflows reference named surfaces, capabilities, assertions, and signals defined in the repo, which keeps exploration controlled and repeatable.
+
+BugScrub also maintains a global home directory for user-level defaults and CLI-managed schema artifacts:
+
+- Linux: `$XDG_CONFIG_HOME/bugscrub` or `~/.config/bugscrub`
+- macOS: `~/Library/Application Support/bugscrub`
+- Windows: use WSL and the Linux path conventions above
+
+Global state is machine-local. Repo behavior still lives in `.bugscrub/`.
 
 ## Status
 

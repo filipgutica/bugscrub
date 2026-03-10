@@ -1,0 +1,5 @@
+- name: blank_surface
+  kind: dom_change
+  description: Blank surface marker changes
+  target:
+    test_id: blank-surface

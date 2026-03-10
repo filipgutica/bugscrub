@@ -1,0 +1,17 @@
+- name: login
+  description: Log in as the selected identity
+  preconditions: []
+  guidance:
+    - Start from a logged-out session
+  success_signals: []
+  failure_signals: []
+- name: inspect_requests_list
+  description: Inspect the requests list
+  preconditions:
+    - requests_table_visible
+  guidance:
+    - Verify the table renders rows
+  success_signals:
+    - results_refresh
+  failure_signals:
+    - blank_surface

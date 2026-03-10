@@ -1,0 +1,15 @@
+- name: results_refresh
+  kind: dom_change
+  description: The last-action card updates when the activity filter changes.
+  target:
+    test_id: results-refresh-indicator
+- name: identity_summary_refresh
+  kind: dom_change
+  description: The identity summary updates after switching users.
+  target:
+    test_id: identity-summary
+- name: blank_surface
+  kind: dom_change
+  description: Placeholder signal for a visibly broken or blank surface.
+  target:
+    test_id: missing-blank-state

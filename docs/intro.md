@@ -98,10 +98,17 @@ BugScrub runs inside the repo being tested.
   workflows/
   surfaces/
   reports/
-  generated/
 ```
 
-Workflows reference named surfaces and capabilities defined in the repo.
+Workflows reference named surfaces, capabilities, assertions, and signals defined in the repo.
+
+BugScrub also maintains a machine-local home directory for user defaults and CLI-managed schema artifacts:
+
+- Linux: `$XDG_CONFIG_HOME/bugscrub` or `~/.config/bugscrub`
+- macOS: `~/Library/Application Support/bugscrub`
+- Windows: supported via WSL using the Linux path conventions above
+
+Repo behavior lives in `.bugscrub/`. Machine-local defaults and generated schema cache live in the BugScrub home directory.
 
 Example shape:
 
@@ -124,8 +131,9 @@ exploration:
       max: 2
 
 hard_assertions:
-  - no_blank_screen
+  - page_not_blank
   - no_5xx_responses
+  - api_requests_visible
 
 evidence:
   screenshots: true
@@ -215,12 +223,13 @@ Executes a workflow using an agent adapter after resolving auth and validating r
 
 ### `schema`
 
-Prints a JSON Schema for a given config type, or writes all schemas to `.bugscrub/generated/schemas/` for editor tooling.
+Prints a JSON Schema for a given config type for inspection/debugging.
 
 ```bash
 bugscrub schema workflow    # print JSON Schema for WorkflowConfig
-bugscrub schema --write     # write all schemas + inject VS Code YAML associations
 ```
+
+BugScrub keeps editor-tooling schemas in its global home automatically on first run and when the schema version changes. Runtime validation does not depend on those exported files.
 
 ---
 
@@ -341,4 +350,3 @@ BugScrub helps answer:
 **what did we not think to test?**
 
 That is the gap many teams still fill manually today.
-

@@ -1,0 +1,17 @@
+name: api-requests-exploration
+target:
+  surface: api_requests
+  env: staging
+setup:
+  - capability: login
+exploration:
+  tasks:
+    - capability: inspect_requests_list
+      min: 1
+      max: 2
+hard_assertions:
+  - page_not_blank
+  - api_requests_visible
+evidence:
+  screenshots: true
+  network_logs: true

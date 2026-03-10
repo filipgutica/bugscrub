@@ -1,0 +1,10 @@
+- name: results_refresh
+  kind: dom_change
+  description: Results table changes after interaction
+  target:
+    test_id: api-requests-table
+- name: blank_surface
+  kind: dom_change
+  description: Blank surface marker changes
+  target:
+    test_id: blank-surface

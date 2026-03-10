@@ -1,17 +1,31 @@
 import { Command } from 'commander'
 
-import { logger } from '../utils/logger.js'
+import { getJsonSchemaByType, schemaTypes, type SchemaType } from '../schemas/index.js'
+import { CliError } from '../utils/errors.js'
+
+export const runSchemaCommand = ({
+  type
+}: {
+  type: string
+}): void => {
+  if (!schemaTypes.includes(type as SchemaType)) {
+    throw new CliError({
+      message: `Unknown schema type "${type}". Valid types: ${schemaTypes.join(', ')}.`,
+      exitCode: 2
+    })
+  }
+
+  process.stdout.write(
+    `${JSON.stringify(getJsonSchemaByType({ type: type as SchemaType }), null, 2)}\n`
+  )
+}
 
 export const registerSchemaCommand = (program: Command): void => {
   program
     .command('schema')
-    .description('Print or export JSON Schemas for BugScrub config types.')
-    .argument('[type]', 'Schema type to print, such as workflow or surface.')
-    .option('--write', 'Write all schemas to .bugscrub/generated/schemas/.')
-    .action(() => {
-      logger.warn(
-        '`bugscrub schema` is not implemented yet. Phase 0 only provides the CLI skeleton.'
-      )
-      process.exitCode = 1
+    .description('Print a JSON Schema for a BugScrub config type.')
+    .argument('<type>', `Schema type to print. One of: ${schemaTypes.join(', ')}.`)
+    .action((type: string) => {
+      runSchemaCommand({ type })
     })
 }

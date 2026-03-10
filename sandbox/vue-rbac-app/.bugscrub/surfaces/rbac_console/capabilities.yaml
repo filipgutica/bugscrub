@@ -1,0 +1,36 @@
+- name: login
+  description: Start a logged-in session using the identity switcher controls.
+  preconditions: []
+  guidance:
+    - If the app is already logged in as the wrong identity, switch to the requested one.
+  success_signals: []
+  failure_signals: []
+- name: switch_identity
+  description: Change the active identity between admin, viewer, and auditor.
+  preconditions:
+    - identity_switcher_visible
+  guidance:
+    - Confirm the identity summary updates after switching.
+  success_signals:
+    - identity_summary_refresh
+  failure_signals:
+    - blank_surface
+- name: inspect_role_actions
+  description: Inspect which action buttons are visible for the active identity.
+  preconditions:
+    - actions_panel_visible
+  guidance:
+    - Verify that export and role-management actions respect the active identity.
+  success_signals: []
+  failure_signals:
+    - blank_surface
+- name: filter_audit_feed
+  description: Change the audit feed filter.
+  preconditions:
+    - filters_panel_visible
+  guidance:
+    - Change the activity filter and verify the last-action indicator updates.
+  success_signals:
+    - results_refresh
+  failure_signals:
+    - blank_surface

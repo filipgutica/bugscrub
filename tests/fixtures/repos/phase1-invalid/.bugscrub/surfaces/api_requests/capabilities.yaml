@@ -1,0 +1,8 @@
+- name: inspect_requests_list
+  description: Inspect the requests list
+  preconditions: []
+  guidance:
+    - Look at the rows
+  success_signals:
+    - results_refresh
+  failure_signals: []

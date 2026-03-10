@@ -1,0 +1,28 @@
+version: '0'
+project: vue-rbac-sandbox
+defaultEnv: local
+envs:
+  local:
+    baseUrl: http://localhost:5173
+    defaultIdentity: admin
+    identities:
+      admin:
+        auth:
+          type: env
+          usernameEnvVar: BUGSCRUB_SANDBOX_ADMIN_USER
+          passwordEnvVar: BUGSCRUB_SANDBOX_ADMIN_PASS
+      viewer:
+        auth:
+          type: env
+          usernameEnvVar: BUGSCRUB_SANDBOX_VIEWER_USER
+          passwordEnvVar: BUGSCRUB_SANDBOX_VIEWER_PASS
+      auditor:
+        auth:
+          type: env
+          usernameEnvVar: BUGSCRUB_SANDBOX_AUDITOR_USER
+          passwordEnvVar: BUGSCRUB_SANDBOX_AUDITOR_PASS
+agent:
+  preferred: auto
+  timeout: 300
+  maxBudgetUsd: 3
+  maxSteps: 20

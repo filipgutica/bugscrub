@@ -1,0 +1,17 @@
+version: '0'
+project: bugscrub-fixture-invalid
+defaultEnv: staging
+envs:
+  staging:
+    baseUrl: https://staging.example.com
+    defaultIdentity: admin
+    identities:
+      admin:
+        auth:
+          type: env
+          usernameEnvVar: BUGSCRUB_ADMIN_USER
+          passwordEnvVar: BUGSCRUB_ADMIN_PASS
+agent:
+  preferred: auto
+  timeout: 300
+  maxBudgetUsd: 5

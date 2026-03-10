@@ -1,0 +1,8 @@
+name: api_requests
+routes:
+  - /observability/api-requests
+elements:
+  requests_table:
+    test_id: api-requests-table
+capabilities:
+  - inspect_requests_list

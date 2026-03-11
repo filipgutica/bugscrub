@@ -24,6 +24,20 @@ describe('runSchemaCommand', () => {
     expect(parsed.definitions.workflowSchema).toBeDefined()
   })
 
+  it('supports the run-result schema type', () => {
+    const writeSpy = vi
+      .spyOn(process.stdout, 'write')
+      .mockImplementation(() => true)
+
+    runSchemaCommand({ type: 'run-result' })
+
+    const printed = String(writeSpy.mock.calls[0]?.[0] ?? '')
+    const parsed = JSON.parse(printed)
+
+    expect(parsed.$ref).toBe('#/definitions/runResultSchema')
+    expect(parsed.definitions.runResultSchema).toBeDefined()
+  })
+
   it('throws a usage error for unknown schema types', () => {
     expect(() => {
       runSchemaCommand({ type: 'nope' })

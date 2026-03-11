@@ -2,6 +2,10 @@ name: api-requests-exploration
 target:
   surface: api_requests
   env: staging
+requires:
+  - browser.navigation
+  - browser.dom.read
+  - browser.network.observe
 setup:
   - capability: login
 exploration:

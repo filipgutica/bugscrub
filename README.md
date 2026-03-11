@@ -9,7 +9,7 @@ Schema-driven exploratory bug scrubbing for web apps and APIs.
 </p>
 
 <p align="center">
-<code>init</code> · <code>generate</code> · <code>run</code> · <code>validate</code>
+<code>init</code> · <code>discover</code> · <code>generate</code> · <code>run</code> · <code>validate</code>
 </p>
 
 BugScrub is a schema-driven CLI for running capability-bounded exploratory bug scrub workflows against web applications and APIs.
@@ -50,13 +50,15 @@ This is not a traditional E2E framework, not an AI testing SaaS, and not open-en
 
 ```text
 bugscrub init
+bugscrub discover
 bugscrub validate
 bugscrub generate
 bugscrub run
 bugscrub schema
 ```
 
-- `init` scaffolds `.bugscrub/` from an existing codebase.
+- `init` bootstraps `.bugscrub/` in a new repo and immediately invokes an authoring agent.
+- `discover` rescans an already initialized repo and asks the agent to add missing surfaces or workflows.
 - `validate` checks config and workflow files against schemas.
 - `generate` drafts workflows from diffs, tests, routes, or existing workflows.
 - `run` executes a workflow through a compatible agent adapter.

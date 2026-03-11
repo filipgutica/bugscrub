@@ -3,6 +3,7 @@
 import { Command, CommanderError } from 'commander'
 import { fileURLToPath } from 'node:url'
 
+import { registerDiscoverCommand } from './commands/discover.js'
 import { registerGenerateCommand } from './commands/generate.js'
 import { registerInitCommand } from './commands/init.js'
 import { registerRunCommand } from './commands/run.js'
@@ -23,6 +24,7 @@ export const buildCli = (): Command => {
     .exitOverride()
 
   registerInitCommand(program)
+  registerDiscoverCommand(program)
   registerValidateCommand(program)
   registerGenerateCommand(program)
   registerRunCommand(program)

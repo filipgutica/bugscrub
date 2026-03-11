@@ -19,7 +19,7 @@ describe('runValidateCommand', () => {
       .mockImplementation(() => true)
 
     await expect(
-      runValidateCommand({ cwd: join(fixturesDir, 'phase1-valid') })
+      runValidateCommand({ cwd: join(fixturesDir, 'workspace-valid') })
     ).resolves.toBeUndefined()
 
     expect(successSpy).toHaveBeenCalled()
@@ -27,13 +27,13 @@ describe('runValidateCommand', () => {
 
   it('fails with actionable errors for invalid references', async () => {
     await expect(
-      runValidateCommand({ cwd: join(fixturesDir, 'phase1-invalid') })
+      runValidateCommand({ cwd: join(fixturesDir, 'workspace-invalid') })
     ).rejects.toMatchObject({
       exitCode: 1
     })
 
     try {
-      await runValidateCommand({ cwd: join(fixturesDir, 'phase1-invalid') })
+      await runValidateCommand({ cwd: join(fixturesDir, 'workspace-invalid') })
     } catch (error) {
       expect(error).toBeInstanceOf(CliError)
       expect((error as CliError).message).toContain('missing capability')

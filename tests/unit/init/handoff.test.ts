@@ -18,8 +18,9 @@ describe('authoring handoff guardrails', () => {
       selectedPackage: undefined
     })
 
-    expect(handoff).toContain('Do not run `bugscrub init`, `bugscrub discover`, `bugscrub generate`, `bugscrub run`, or `bugscrub schema`')
-    expect(handoff).toContain('Only use `bugscrub validate`')
+    expect(handoff).toContain('Do not run `bugscrub init`, `bugscrub discover`, `bugscrub generate`, or `bugscrub run`')
+    expect(handoff).toContain('Use `bugscrub schema <type>`')
+    expect(handoff).toContain('Use `bugscrub validate`')
   })
 
   it('forbids recursive BugScrub commands during discover authoring', () => {
@@ -30,7 +31,8 @@ describe('authoring handoff guardrails', () => {
       selectedPackage: undefined
     })
 
-    expect(handoff).toContain('Do not run `bugscrub init`, `bugscrub discover`, `bugscrub generate`, `bugscrub run`, or `bugscrub schema`')
-    expect(handoff).toContain('Only use `bugscrub validate`')
+    expect(handoff).toContain('Do not run `bugscrub init`, `bugscrub discover`, `bugscrub generate`, or `bugscrub run`')
+    expect(handoff).toContain('Use `bugscrub schema <type>`')
+    expect(handoff).toContain('Use `bugscrub validate`')
   })
 })

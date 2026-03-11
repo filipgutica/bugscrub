@@ -1,10 +1,9 @@
-import { cp, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { afterEach, describe, expect, it } from 'vitest'
-
 import { executeRun } from '../../../src/runner/index.js'
 import type { AgentAdapter, AgentCapabilities, RunContext } from '../../../src/runner/agent/types.js'
 
@@ -42,9 +41,6 @@ class FakeAdapter implements AgentAdapter {
 
     return {
       artifacts: {
-        raw: {
-          adapter: 'fake'
-        },
         stderr: '',
         stdout: '{"event":"completed"}\n'
       },
@@ -62,9 +58,6 @@ class FakeAdapter implements AgentAdapter {
         evidence: {
           screenshots: [],
           networkLogs: []
-        },
-        raw: {
-          adapter: 'fake'
         }
       }
     }
@@ -166,7 +159,56 @@ describe('executeRun', () => {
     const transcriptFile = join(debugRoot, (await readFile(result.reportPaths!.json, 'utf8')).match(/"runId": "([^"]+)"/)?.[1] ?? '', 'agent-transcript.jsonl')
 
     expect(await readFile(promptFile, 'utf8')).toContain('## Output format')
+    expect(await readFile(promptFile, 'utf8')).toContain('## Runtime preparation')
+    expect(await readFile(promptFile, 'utf8')).toContain('Verify that `https://staging.example.com` is reachable')
     expect(await readFile(promptFile, 'utf8')).toBe(adapter.lastPrompt)
     expect(await readFile(transcriptFile, 'utf8')).toContain('completed')
   })
+
+  it('tells the agent to return an empty assertionResults array when the workflow has no hard assertions', async () => {
+    const repoPath = await createTempRepo({
+      fixtureName: 'workspace-valid'
+    })
+    await writeFile(
+      join(repoPath, '.bugscrub', 'workflows', 'api-requests.yaml'),
+      [
+        'name: api-requests-exploration',
+        'target:',
+        '  surface: api_requests',
+        '  env: staging',
+        'requires:',
+        '  - browser.navigation',
+        '  - browser.dom.read',
+        '  - browser.network.observe',
+        'setup:',
+        '  - capability: login',
+        'exploration:',
+        '  tasks:',
+        '    - capability: inspect_requests_list',
+        '      min: 1',
+        '      max: 2',
+        'hard_assertions: []',
+        'evidence:',
+        '  screenshots: true',
+        '  network_logs: true',
+        ''
+      ].join('\n'),
+      'utf8'
+    )
+    const adapter = new FakeAdapter()
+
+    await executeRun({
+      adapters: [adapter],
+      cwd: repoPath,
+      dryRun: false,
+      ensureBrowserRuntimeConfigured: async () => {},
+      maxSteps: undefined,
+      workflow: 'api-requests-exploration'
+    })
+
+    expect(adapter.lastPrompt).toContain('This workflow has no hard assertions.')
+    expect(adapter.lastPrompt).toContain('Set `assertionResults` to an empty array')
+    expect(adapter.lastPrompt).toContain('Do not put capability names, task names, or free-form checks into `assertionResults`.')
+  })
+
 })

@@ -4,6 +4,7 @@ import { loadBugScrubConfig } from '../core/config.js'
 import { loadWorkspaceFiles } from '../core/loader.js'
 import { resolveWorkspaceDefinition, validateWorkspaceDefinition } from '../core/resolver.js'
 import { getJsonSchemaByType } from '../schemas/index.js'
+import { codexRunResultJsonSchema } from '../schemas/run-result.schema.js'
 import type { AssertionConfig, CapabilityConfig, SignalConfig, WorkflowConfig } from '../types/index.js'
 import { nowIso } from '../utils/date.js'
 import { CliError, ValidationError } from '../utils/errors.js'
@@ -35,6 +36,9 @@ import { negotiateCapabilities } from './negotiator.js'
 import { buildPromptForContext } from './prompt/builder.js'
 import type { ResolvedSurface } from '../core/resolver.js'
 
+// Runner is the only place where validated repo definitions become an
+// executable agent request. Everything above this layer should stay agent-
+// agnostic; everything below it should consume a fully prepared RunContext.
 const resolveIdentity = ({
   environment,
   identityName
@@ -190,6 +194,8 @@ const buildRunContext = ({
     runId,
     workflowName: selectedWorkflow.workflow.name
   })
+  // Materialize all identities up front so the prompt builder and adapters get
+  // a stable snapshot of the selected environment.
   const identities = Object.keys(environment.identities).map((identityName) =>
     resolveIdentity({
       environment: environment.identities,
@@ -441,6 +447,8 @@ export const executeRun = async ({
     }
   }
 
+  // Browser runtime setup is deferred until after dry-run so config validation
+  // stays cheap and does not require external runtime state.
   await ensureBrowserRuntimeConfigured({
     agent: selectedAdapter.selected.name
   })
@@ -456,7 +464,7 @@ export const executeRun = async ({
     }),
     writeResponseSchemaArtifact({
       path: context.artifacts.responseSchemaPath,
-      schema: JSON.stringify(getJsonSchemaByType({ type: 'run-result' }), null, 2)
+      schema: JSON.stringify(codexRunResultJsonSchema, null, 2)
     })
   ])
 

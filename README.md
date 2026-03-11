@@ -46,10 +46,11 @@ BugScrub complements existing testing rather than replacing it.
 
 This is not a traditional E2E framework, not an AI testing SaaS, and not open-ended prompt-driven testing. It is exploratory testing as code, with repo-defined boundaries.
 
-## Planned CLI
+## CLI
 
 ```text
 bugscrub init
+bugscrub setup
 bugscrub discover
 bugscrub validate
 bugscrub generate
@@ -57,11 +58,12 @@ bugscrub run
 bugscrub schema
 ```
 
-- `init` bootstraps `.bugscrub/` in a new repo and immediately invokes an authoring agent.
-- `discover` rescans an already initialized repo and asks the agent to add missing surfaces or workflows.
-- `validate` checks config and workflow files against schemas.
+- `init` bootstraps `.bugscrub/` in a new repo, invokes an authoring agent, and validates authored files before syncing them back.
+- `setup` adds a local-dev `bugscrub` shell function to your shell rc file.
+- `discover` rescans an already initialized repo, asks the agent to add missing surfaces or workflows, and validates the authored result.
+- `validate` checks config, surface, and workflow files against schemas plus cross-file semantic constraints.
 - `generate` drafts workflows from interactive source selection, routes, or existing workflows.
-- `run` executes a workflow through a compatible agent adapter.
+- `run` executes a workflow through a compatible agent adapter. Pass `--workflow <path-or-name>` when multiple workflows exist.
 - `schema` prints JSON Schemas for inspection and debugging.
 
 ## Quickstart
@@ -69,19 +71,44 @@ bugscrub schema
 ```bash
 pnpm install
 pnpm build
-pnpm dev -- init
-pnpm dev -- validate
-pnpm dev -- generate
-pnpm dev -- run --workflow .bugscrub/workflows/api-requests.yaml --dry-run
+./dist/bugscrub init
+./dist/bugscrub validate
+./dist/bugscrub generate
+./dist/bugscrub run --workflow .bugscrub/workflows/api-requests.yaml --dry-run
 ```
 
 In a pnpm monorepo, package-scoped commands support a top-level `--filter` flag:
 
 ```bash
-pnpm dev -- --filter apps/web init
-pnpm dev -- --filter workspace-web generate --from-route /settings
-pnpm dev -- --filter apps/admin validate
+./dist/bugscrub --filter apps/web init
+./dist/bugscrub --filter workspace-web generate --from-route /settings
+./dist/bugscrub --filter apps/admin validate
 ```
+
+## Local Dev Install
+
+For local development, use the built CLI from your checkout:
+
+- clone this repo
+- run `pnpm install`
+- run `pnpm build`
+- run `./dist/bugscrub setup ~/.zshrc` or `./dist/bugscrub setup ~/.bashrc`
+- run `source ~/.zshrc` or `source ~/.bashrc`
+- now you can use `bugscrub <command>` anywhere
+
+Example:
+
+```bash
+bugscrub validate
+bugscrub schema workflow
+bugscrub init
+```
+
+The `setup` command writes an idempotent shell function block, so rerunning it updates
+the existing BugScrub snippet instead of duplicating it.
+
+For installed usage outside local development, use a normal global install such as
+`npm install -g bugscrub`.
 
 ## Generate Examples
 
@@ -99,6 +126,18 @@ pnpm dev -- generate --from-workflow .bugscrub/workflows/api-requests.yaml --dry
 - existing repo tests
 
 Route generation reuses an existing surface when `.bugscrub/surfaces/*/surface.yaml` has an exact route match. Otherwise it writes a draft against an inferred stub surface name and leaves TODO capability markers in the workflow.
+
+## Validation And Run
+
+`bugscrub validate` does more than shape validation. It also checks cross-file references and semantic workflow requirements, such as:
+
+- referenced surfaces, capabilities, assertions, and signals exist
+- referenced identities exist in the selected environment
+- `workflow.requires` contains supported runtime capability names rather than free-form prose
+
+`bugscrub run` executes one workflow. If the repo contains multiple workflows, pass `--workflow <path-or-name>`.
+
+During `init`, BugScrub seeds `local.baseUrl` from the detected framework defaults, and the authoring agent may refine it for the repo. `run` uses the configured target URL directly, so if the inferred local URL is wrong you can update it in `.bugscrub/bugscrub.config.yaml`.
 
 ## Repo Layout
 

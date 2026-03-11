@@ -4,14 +4,11 @@ import { basename, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import chalk from 'chalk'
+import { createTranscriptRenderer, renderTranscriptText } from './transcript.js'
 import type { BugScrubConfig } from '../types/index.js'
 import { CliError } from '../utils/errors.js'
 import { parseYaml, stringifyYaml } from '../utils/yaml.js'
-import {
-  getTerminalWidth,
-  logger,
-  wrapTerminalText
-} from '../utils/logger.js'
+import { logger } from '../utils/logger.js'
 import { fileExists, writeTextFile } from '../utils/fs.js'
 import { promptForChoice } from '../utils/tty-select.js'
 import { runCommand, isCommandAvailable } from '../runner/agent/process.js'
@@ -109,23 +106,12 @@ const AUTHORING_EXCLUDED_PATTERNS = [
   /\.(?:cer|crt|der|key|kdbx|p12|pem|pfx)$/i
 ] as const
 
-const NOISY_DIFF_FILE_PATTERNS = [
-  /(?:^|\/)(?:dist|build|coverage)\//i,
-  /\.(?:map|min\.(?:css|js))$/i,
-  /(?:^|\/)(?:package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/i
-] as const
-
-type TranscriptFormattingState = {
-  collapsedNoisyDiff: boolean
-  currentDiffFile: string | undefined
-  inCodeBlock: boolean
-}
-
 // Authoring is synthesis-heavy but still routine enough that we should not pay top-tier
 // model cost by default. Use the mainstream coding tiers unless we later expose a user
 // override with clearer product semantics.
 const DEFAULT_AUTHORING_CLAUDE_MODEL = 'sonnet'
 const DEFAULT_AUTHORING_CODEX_MODEL = 'gpt-5.3-codex'
+const MAX_AUTHORING_VALIDATION_ATTEMPTS = 3
 
 const promptForAgentSelection = async ({
   agents
@@ -142,438 +128,30 @@ const promptForAgentSelection = async ({
   })
 }
 
-const isNoisyDiffFile = ({
-  path
+export { renderTranscriptText } from './transcript.js'
+
+const buildValidationFeedbackPrompt = ({
+  attempt,
+  basePrompt,
+  validationMessage
 }: {
-  path: string | undefined
-}): boolean => {
-  return path
-    ? NOISY_DIFF_FILE_PATTERNS.some((pattern) => pattern.test(path))
-    : false
-}
-
-const looksGeneratedOrMinified = ({
-  line,
-  width
-}: {
-  line: string
-  width: number
-}): boolean => {
-  if (line.length < width * 2) {
-    return false
-  }
-
-  const whitespaceCount = [...line].filter((character) => /\s/.test(character)).length
-  const punctuationCount = [...line].filter((character) =>
-    /[{}()[\].,;:=<>/+*-]/.test(character)
-  ).length
-
-  return whitespaceCount < line.length / 20 && punctuationCount >= 8
-}
-
-const truncateDisplayLine = ({
-  line,
-  width
-}: {
-  line: string
-  width: number
+  attempt: number
+  basePrompt: string
+  validationMessage: string
 }): string => {
-  const previewWidth = Math.max(24, width - ' ... [truncated for display]'.length)
-
-  if (line.length <= previewWidth) {
-    return line
-  }
-
-  return `${line.slice(0, previewWidth).trimEnd()} ... [truncated for display]`
-}
-
-const wrapStyledText = ({
-  hangingIndent = '',
-  initialIndent = '',
-  style,
-  text,
-  width
-}: {
-  hangingIndent?: string
-  initialIndent?: string
-  style: (value: string) => string
-  text: string
-  width: number
-}): string[] => {
-  return wrapTerminalText({
-    hangingIndent,
-    initialIndent,
-    text,
-    width
-  }).map((segment) => style(segment))
-}
-
-const createTranscriptFormattingState = (): TranscriptFormattingState => ({
-  collapsedNoisyDiff: false,
-  currentDiffFile: undefined,
-  inCodeBlock: false
-})
-
-export const createTranscriptFormatter = ({
-  width = getTerminalWidth()
-}: {
-  width?: number
-} = {}) => {
-  const state = createTranscriptFormattingState()
-
-  const formatLine = ({
-    line,
-    stderr
-  }: {
-    line: string
-    stderr: boolean
-  }): string[] => {
-    if (line.length === 0) {
-      return ['']
-    }
-
-    const diffHeaderMatch = line.match(/^diff --git a\/(.+?) b\/(.+)$/)
-
-    if (diffHeaderMatch) {
-      state.currentDiffFile = diffHeaderMatch[2]
-      state.collapsedNoisyDiff = false
-      return wrapStyledText({
-        style: chalk.bold.yellow,
-        text: line,
-        width
-      })
-    }
-
-    const isNoisyDiff = isNoisyDiffFile({
-      path: state.currentDiffFile
-    })
-
-    if (line.trim().startsWith('```')) {
-      state.inCodeBlock = !state.inCodeBlock
-      return wrapStyledText({
-        style: chalk.gray,
-        text: line.trim(),
-        width
-      })
-    }
-
-    if (
-      isNoisyDiff &&
-      (line.startsWith('+') || line.startsWith('-')) &&
-      !line.startsWith('+++') &&
-      !line.startsWith('---')
-    ) {
-      // Generated bundles and lockfiles are useful to log, but not useful to stream verbatim.
-      if (state.collapsedNoisyDiff) {
-        return []
-      }
-
-      state.collapsedNoisyDiff = true
-      return [
-        chalk.gray(`... generated diff content for ${state.currentDiffFile} truncated for display`)
-      ]
-    }
-
-    const lower = line.toLowerCase()
-
-    if (line === 'codex' || line === 'claude') {
-      return wrapStyledText({
-        style: chalk.bold.blue,
-        text: line,
-        width
-      })
-    }
-
-    if (
-      lower.includes('error') ||
-      lower.includes('failed') ||
-      lower.includes('fatal') ||
-      lower.startsWith('err:')
-    ) {
-      return wrapStyledText({
-        style: chalk.red,
-        text: line,
-        width
-      })
-    }
-
-    if (lower.includes('warning') || lower.startsWith('warn:')) {
-      return wrapStyledText({
-        style: chalk.yellow,
-        text: line,
-        width
-      })
-    }
-
-    if (stderr) {
-      return wrapStyledText({
-        style: chalk.gray,
-        text:
-          looksGeneratedOrMinified({
-            line,
-            width
-          })
-            ? truncateDisplayLine({
-                line,
-                width
-              })
-            : line,
-        width
-      })
-    }
-
-    if (line === 'exec' || line === 'file update:' || line === 'tokens used') {
-      return wrapStyledText({
-        style: chalk.bold.magenta,
-        text: line,
-        width
-      })
-    }
-
-    if (line.startsWith('+++ ')) {
-      return wrapStyledText({
-        style: chalk.green,
-        text: line,
-        width
-      })
-    }
-
-    if (line.startsWith('--- ')) {
-      return wrapStyledText({
-        style: chalk.red,
-        text: line,
-        width
-      })
-    }
-
-    if (line.startsWith('@@')) {
-      return wrapStyledText({
-        style: chalk.cyan,
-        text: line,
-        width
-      })
-    }
-
-    if (line.startsWith('+') && !line.startsWith('+++')) {
-      return wrapStyledText({
-        hangingIndent: ' ',
-        initialIndent: '+',
-        style: chalk.green,
-        text: looksGeneratedOrMinified({
-          line,
-          width
-        })
-          ? truncateDisplayLine({
-              line: line.slice(1),
-              width
-            })
-          : line.slice(1),
-        width
-      })
-    }
-
-    if (line.startsWith('-') && !line.startsWith('---')) {
-      return wrapStyledText({
-        hangingIndent: ' ',
-        initialIndent: '-',
-        style: chalk.red,
-        text: looksGeneratedOrMinified({
-          line,
-          width
-        })
-          ? truncateDisplayLine({
-              line: line.slice(1),
-              width
-            })
-          : line.slice(1),
-        width
-      })
-    }
-
-    if (line.startsWith('# ')) {
-      return wrapStyledText({
-        style: chalk.bold.cyan,
-        text: line,
-        width
-      })
-    }
-
-    if (line.startsWith('## ') || line.startsWith('### ')) {
-      return wrapStyledText({
-        style: chalk.bold,
-        text: line,
-        width
-      })
-    }
-
-    if (line.startsWith('- ') || line.startsWith('* ')) {
-      return wrapStyledText({
-        hangingIndent: '  ',
-        initialIndent: `${line[0]} `,
-        style: (value) => value,
-        text: line.slice(2),
-        width
-      })
-    }
-
-    if (/^\d+\.\s/.test(line)) {
-      const marker = line.match(/^\d+\.\s/)?.[0] ?? ''
-      return wrapStyledText({
-        hangingIndent: ' '.repeat(marker.length),
-        initialIndent: marker,
-        style: (value) => value,
-        text: line.slice(marker.length),
-        width
-      })
-    }
-
-    if (line.startsWith('bugscrub ')) {
-      const wrapped = wrapTerminalText({
-        hangingIndent: '         ',
-        initialIndent: '',
-        text: line.slice('bugscrub '.length),
-        width: width - 'bugscrub '.length
-      })
-
-      return wrapped.map((segment, index) =>
-        index === 0 ? `${chalk.blue('bugscrub')} ${segment}` : `         ${segment}`
-      )
-    }
-
-    if (state.inCodeBlock) {
-      return wrapStyledText({
-        hangingIndent: '  ',
-        initialIndent: '  ',
-        style: chalk.gray,
-        text: line,
-        width
-      })
-    }
-
-    if (line.startsWith('/bin/') || line.startsWith('.bugscrub/') || line.startsWith('index ')) {
-      return wrapStyledText({
-        style: chalk.gray,
-        text: line,
-        width
-      })
-    }
-
-    return wrapStyledText({
-      style: (value) => value,
-      text:
-        looksGeneratedOrMinified({
-          line,
-          width
-        })
-          ? truncateDisplayLine({
-              line,
-              width
-            })
-          : line,
-      width
-    })
-  }
-
-  return {
-    formatLine
-  }
-}
-
-export const renderTranscriptText = ({
-  stderr,
-  text,
-  width
-}: {
-  stderr: boolean
-  text: string
-  width?: number
-}): string => {
-  const formatter = createTranscriptFormatter({
-    ...(width ? { width } : {})
-  })
-
-  return text
-    .split('\n')
-    .flatMap((line) =>
-      formatter.formatLine({
-        line,
-        stderr
-      })
-    )
-    .join('\n')
-}
-
-const createTranscriptRenderer = () => {
-  const formatter = createTranscriptFormatter()
-  let stdoutBuffer = ''
-  let stderrBuffer = ''
-
-  const flushBuffer = ({
-    buffer,
-    stderr
-  }: {
-    buffer: string
-    stderr: boolean
-  }): string => {
-    const lines = buffer.split('\n')
-    const remainder = lines.pop() ?? ''
-
-    for (const line of lines) {
-      const stream = stderr ? process.stderr : process.stdout
-      formatter
-        .formatLine({
-          line,
-          stderr
-        })
-        .forEach((formatted) => {
-          stream.write(`${formatted}\n`)
-        })
-    }
-
-    return remainder
-  }
-
-  return {
-    flush: (): void => {
-      if (stdoutBuffer.length > 0) {
-        formatter
-          .formatLine({
-            line: stdoutBuffer,
-            stderr: false
-          })
-          .forEach((formatted) => {
-            process.stdout.write(`${formatted}\n`)
-          })
-        stdoutBuffer = ''
-      }
-
-      if (stderrBuffer.length > 0) {
-        formatter
-          .formatLine({
-            line: stderrBuffer,
-            stderr: true
-          })
-          .forEach((formatted) => {
-            process.stderr.write(`${formatted}\n`)
-          })
-        stderrBuffer = ''
-      }
-    },
-    pushStderr: (chunk: string): void => {
-      stderrBuffer += chunk
-      stderrBuffer = flushBuffer({
-        buffer: stderrBuffer,
-        stderr: true
-      })
-    },
-    pushStdout: (chunk: string): void => {
-      stdoutBuffer += chunk
-      stdoutBuffer = flushBuffer({
-        buffer: stdoutBuffer,
-        stderr: false
-      })
-    }
-  }
+  return [
+    basePrompt,
+    '',
+    '# Validation feedback',
+    `Your previous authoring pass produced BugScrub files that failed validation on attempt ${attempt}.`,
+    'Fix only the reported BugScrub validation issues, preserve unrelated authored work, then stop.',
+    'Use `bugscrub schema <type>` if you need the exact schema shape for a file before editing it.',
+    '',
+    'Validation output:',
+    '```',
+    validationMessage,
+    '```'
+  ].join('\n')
 }
 
 const detectAvailableAgents = async (): Promise<InitAuthorAgent[]> => {
@@ -818,10 +396,10 @@ const createIsolatedWorkspace = async ({
   const tempBinRoot = join(sessionRoot, 'bin')
   const tempCliRoot = join(sessionRoot, 'bugscrub-cli')
   const wrapperPath = join(tempBinRoot, 'bugscrub')
-  const packagedCliEntryPath = join(tempCliRoot, 'dist', 'index.js')
+  const packagedCliWrapperPath = join(tempCliRoot, 'dist', 'bugscrub')
   const sourceCliEntryPath = join(tempCliRoot, 'src', 'index.ts')
   const hasPackagedCli = await fileExists({
-    path: join(BUGSCRUB_PROJECT_ROOT, 'dist', 'index.js')
+    path: join(BUGSCRUB_PROJECT_ROOT, 'dist', 'bugscrub')
   })
 
   await mkdir(tempCliRoot, {
@@ -863,7 +441,7 @@ const createIsolatedWorkspace = async ({
   await writeTextFile({
     path: wrapperPath,
     contents: hasPackagedCli
-      ? ['#!/bin/sh', `exec node "${packagedCliEntryPath}" "$@"`].join('\n')
+      ? ['#!/bin/sh', `exec "${packagedCliWrapperPath}" "$@"`].join('\n')
       : [
           '#!/bin/sh',
           `exec node --import "${join(tempCliRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs')}" "${sourceCliEntryPath}" "$@"`
@@ -1048,164 +626,141 @@ export const syncAuthoredWorkspace = async ({
   })
 }
 
-const runCodexAuthoring = async ({
-  cwd,
-  prompt,
+const validateAuthoredWorkspace = async ({
+  env,
+  tempWorkspaceRoot,
   timeoutSeconds
 }: {
-  cwd: string
-  prompt: string
+  env: NodeJS.ProcessEnv
+  tempWorkspaceRoot: string
   timeoutSeconds: number
-}): Promise<InitAuthorResult> => {
-  const isolatedWorkspace = await createIsolatedWorkspace({
-    agent: 'codex',
-    cwd
+}): Promise<{
+  exitCode: number
+  message: string
+  stderr: string
+  stdout: string
+}> => {
+  const result = await runCommand({
+    args: ['validate'],
+    command: 'bugscrub',
+    cwd: tempWorkspaceRoot,
+    env,
+    timeoutMs: timeoutSeconds * 1_000
   })
-  const renderer = createTranscriptRenderer()
-  let result: Awaited<ReturnType<typeof runCommand>> | undefined
-
-  try {
-    result = await runCommand({
-      args: [
-        'exec',
-        '--model',
-        DEFAULT_AUTHORING_CODEX_MODEL,
-        '--sandbox',
-        'workspace-write',
-        '--skip-git-repo-check',
-        prompt
-      ],
-      command: 'codex',
-      cwd: isolatedWorkspace.tempWorkspaceRoot,
-      env: isolatedWorkspace.env,
-      onStderr: (chunk) => {
-        renderer.pushStderr(chunk)
-      },
-      onStdout: (chunk) => {
-        renderer.pushStdout(chunk)
-      },
-      timeoutMs: timeoutSeconds * 1_000
-    })
-    renderer.flush()
-
-    if (result.exitCode !== 0) {
-      throw new CliError({
-        message: `Codex authoring failed with exit code ${result.exitCode}.\n${result.stderr.trim()}`,
-        exitCode: 1
-      })
-    }
-
-    await syncAuthoredWorkspace({
-      cwd,
-      tempWorkspaceRoot: isolatedWorkspace.tempWorkspaceRoot
-    })
-  } finally {
-    await isolatedWorkspace.cleanup()
-  }
-
-  if (!result) {
-    throw new CliError({
-      message: 'Codex authoring did not produce a result.',
-      exitCode: 1
-    })
-  }
-
-  const logPath = await writeAuthoringLog({
-    agent: 'codex',
-    cwd,
-    env: isolatedWorkspace.env,
-    stderr: result.stderr,
-    stdout: result.stdout
-  })
+  const message = [result.stdout.trim(), result.stderr.trim()]
+    .filter((value) => value.length > 0)
+    .join('\n')
 
   return {
-    agent: 'codex',
-    logPath,
+    exitCode: result.exitCode,
+    message: message.length > 0 ? message : 'bugscrub validate exited without output.',
     stderr: result.stderr,
     stdout: result.stdout
   }
 }
 
-const runClaudeAuthoring = async ({
-  cwd,
-  maxBudgetUsd,
+const runCodexAuthoringAttempt = async ({
+  env,
   prompt,
+  tempWorkspaceRoot,
   timeoutSeconds
 }: {
-  cwd: string
-  maxBudgetUsd: number
+  env: NodeJS.ProcessEnv
   prompt: string
+  tempWorkspaceRoot: string
   timeoutSeconds: number
 }): Promise<InitAuthorResult> => {
-  const isolatedWorkspace = await createIsolatedWorkspace({
-    agent: 'claude',
-    cwd
-  })
   const renderer = createTranscriptRenderer()
-  let result: Awaited<ReturnType<typeof runCommand>> | undefined
+  const result = await runCommand({
+    args: [
+      'exec',
+      '--model',
+      DEFAULT_AUTHORING_CODEX_MODEL,
+      '--sandbox',
+      'workspace-write',
+      '--skip-git-repo-check',
+      prompt
+    ],
+    command: 'codex',
+    cwd: tempWorkspaceRoot,
+    env,
+    onStderr: (chunk) => {
+      renderer.pushStderr(chunk)
+    },
+    onStdout: (chunk) => {
+      renderer.pushStdout(chunk)
+    },
+    timeoutMs: timeoutSeconds * 1_000
+  })
+  renderer.flush()
 
-  try {
-    result = await runCommand({
-      args: [
-        '--print',
-        '--output-format',
-        'text',
-        '--model',
-        DEFAULT_AUTHORING_CLAUDE_MODEL,
-        '--permission-mode',
-        'acceptEdits',
-        '--max-budget-usd',
-        String(maxBudgetUsd),
-        prompt
-      ],
-      command: 'claude',
-      cwd: isolatedWorkspace.tempWorkspaceRoot,
-      env: isolatedWorkspace.env,
-      onStderr: (chunk) => {
-        renderer.pushStderr(chunk)
-      },
-      onStdout: (chunk) => {
-        renderer.pushStdout(chunk)
-      },
-      timeoutMs: timeoutSeconds * 1_000
-    })
-    renderer.flush()
-
-    if (result.exitCode !== 0) {
-      throw new CliError({
-        message: `Claude authoring failed with exit code ${result.exitCode}.\n${result.stderr.trim()}`,
-        exitCode: 1
-      })
-    }
-
-    await syncAuthoredWorkspace({
-      cwd,
-      tempWorkspaceRoot: isolatedWorkspace.tempWorkspaceRoot
-    })
-  } finally {
-    await isolatedWorkspace.cleanup()
-  }
-
-  if (!result) {
+  if (result.exitCode !== 0) {
     throw new CliError({
-      message: 'Claude authoring did not produce a result.',
+      message: `Codex authoring failed with exit code ${result.exitCode}.\n${result.stderr.trim()}`,
       exitCode: 1
     })
   }
 
-  const logPath = await writeAuthoringLog({
-    agent: 'claude',
-    cwd,
-    env: isolatedWorkspace.env,
+  return {
+    agent: 'codex',
     stderr: result.stderr,
-    stdout: result.stdout
+    stdout: result.stdout,
+    logPath: ''
+  }
+}
+
+const runClaudeAuthoringAttempt = async ({
+  env,
+  maxBudgetUsd,
+  prompt,
+  tempWorkspaceRoot,
+  timeoutSeconds
+}: {
+  env: NodeJS.ProcessEnv
+  maxBudgetUsd: number
+  prompt: string
+  tempWorkspaceRoot: string
+  timeoutSeconds: number
+}): Promise<InitAuthorResult> => {
+  const renderer = createTranscriptRenderer()
+  const result = await runCommand({
+    args: [
+      '--print',
+      '--output-format',
+      'text',
+      '--model',
+      DEFAULT_AUTHORING_CLAUDE_MODEL,
+      '--permission-mode',
+      'acceptEdits',
+      '--max-budget-usd',
+      String(maxBudgetUsd),
+      prompt
+    ],
+    command: 'claude',
+    cwd: tempWorkspaceRoot,
+    env,
+    onStderr: (chunk) => {
+      renderer.pushStderr(chunk)
+    },
+    onStdout: (chunk) => {
+      renderer.pushStdout(chunk)
+    },
+    timeoutMs: timeoutSeconds * 1_000
   })
+  renderer.flush()
+
+  if (result.exitCode !== 0) {
+    throw new CliError({
+      message: `Claude authoring failed with exit code ${result.exitCode}.\n${result.stderr.trim()}`,
+      exitCode: 1
+    })
+  }
 
   return {
     agent: 'claude',
-    logPath,
     stderr: result.stderr,
-    stdout: result.stdout
+    stdout: result.stdout,
+    logPath: ''
   }
 }
 
@@ -1234,18 +789,103 @@ export const authorWorkspace = async ({
     `Running ${agent} in an isolated copy of the current directory. Full transcript will be written under .bugscrub/.`
   )
 
-  if (agent === 'codex') {
-    return runCodexAuthoring({
-      cwd,
-      prompt,
-      timeoutSeconds: config.agent.timeout
-    })
+  const isolatedWorkspace = await createIsolatedWorkspace({
+    agent,
+    cwd
+  })
+  const aggregatedStdout: string[] = []
+  const aggregatedStderr: string[] = []
+  let currentPrompt = prompt
+
+  try {
+    for (let attempt = 1; attempt <= MAX_AUTHORING_VALIDATION_ATTEMPTS; attempt += 1) {
+      logger.info(
+        `Authoring attempt ${attempt}/${MAX_AUTHORING_VALIDATION_ATTEMPTS} in the isolated workspace.`
+      )
+
+      const attemptResult =
+        agent === 'codex'
+          ? await runCodexAuthoringAttempt({
+              env: isolatedWorkspace.env,
+              prompt: currentPrompt,
+              tempWorkspaceRoot: isolatedWorkspace.tempWorkspaceRoot,
+              timeoutSeconds: config.agent.timeout
+            })
+          : await runClaudeAuthoringAttempt({
+              env: isolatedWorkspace.env,
+              maxBudgetUsd: config.agent.maxBudgetUsd,
+              prompt: currentPrompt,
+              tempWorkspaceRoot: isolatedWorkspace.tempWorkspaceRoot,
+              timeoutSeconds: config.agent.timeout
+            })
+
+      aggregatedStdout.push(
+        `## Authoring attempt ${attempt}\n${attemptResult.stdout.trim() || '(empty)'}`
+      )
+      aggregatedStderr.push(
+        `## Authoring attempt ${attempt}\n${attemptResult.stderr.trim() || '(empty)'}`
+      )
+
+      const validationResult = await validateAuthoredWorkspace({
+        env: isolatedWorkspace.env,
+        tempWorkspaceRoot: isolatedWorkspace.tempWorkspaceRoot,
+        timeoutSeconds: config.agent.timeout
+      })
+
+      aggregatedStdout.push(
+        `## Validation attempt ${attempt}\n${validationResult.stdout.trim() || '(empty)'}`
+      )
+      aggregatedStderr.push(
+        `## Validation attempt ${attempt}\n${validationResult.stderr.trim() || '(empty)'}`
+      )
+
+      if (validationResult.exitCode === 0) {
+        await syncAuthoredWorkspace({
+          cwd,
+          tempWorkspaceRoot: isolatedWorkspace.tempWorkspaceRoot
+        })
+
+        const logPath = await writeAuthoringLog({
+          agent,
+          cwd,
+          env: isolatedWorkspace.env,
+          stderr: aggregatedStderr.join('\n\n'),
+          stdout: aggregatedStdout.join('\n\n')
+        })
+
+        return {
+          agent,
+          logPath,
+          stderr: aggregatedStderr.join('\n\n'),
+          stdout: aggregatedStdout.join('\n\n')
+        }
+      }
+
+      if (attempt === MAX_AUTHORING_VALIDATION_ATTEMPTS) {
+        throw new CliError({
+          message: [
+            `Authoring produced invalid BugScrub files after ${MAX_AUTHORING_VALIDATION_ATTEMPTS} attempts.`,
+            validationResult.message
+          ].join('\n'),
+          exitCode: 1
+        })
+      }
+
+      logger.warn(
+        `Authoring attempt ${attempt} failed validation. Feeding the validation errors back to ${agent} for repair.`
+      )
+      currentPrompt = buildValidationFeedbackPrompt({
+        attempt,
+        basePrompt: prompt,
+        validationMessage: validationResult.message
+      })
+    }
+  } finally {
+    await isolatedWorkspace.cleanup()
   }
 
-  return runClaudeAuthoring({
-    cwd,
-    maxBudgetUsd: config.agent.maxBudgetUsd,
-    prompt,
-    timeoutSeconds: config.agent.timeout
+  throw new CliError({
+    message: 'Authoring did not produce a validated BugScrub workspace.',
+    exitCode: 1
   })
 }

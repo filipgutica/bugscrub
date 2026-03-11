@@ -8,6 +8,7 @@ import { registerGenerateCommand } from './commands/generate.js'
 import { registerInitCommand } from './commands/init.js'
 import { registerRunCommand } from './commands/run.js'
 import { registerSchemaCommand } from './commands/schema.js'
+import { registerSetupCommand } from './commands/setup.js'
 import { registerValidateCommand } from './commands/validate.js'
 import { CliError } from './utils/errors.js'
 import { logger } from './utils/logger.js'
@@ -29,6 +30,7 @@ export const buildCli = (): Command => {
     .exitOverride()
 
   registerInitCommand(program)
+  registerSetupCommand(program)
   registerDiscoverCommand(program)
   registerValidateCommand(program)
   registerGenerateCommand(program)
@@ -38,11 +40,15 @@ export const buildCli = (): Command => {
   return program
 }
 
-const run = async (): Promise<void> => {
+export const runCli = async ({
+  argv = process.argv
+}: {
+  argv?: string[]
+} = {}): Promise<void> => {
   const cli = buildCli()
 
   try {
-    await cli.parseAsync(process.argv)
+    await cli.parseAsync(argv)
   } catch (error) {
     if (error instanceof CommanderError) {
       if (
@@ -66,7 +72,7 @@ const run = async (): Promise<void> => {
 const entrypointPath = process.argv[1]
 
 if (entrypointPath && fileURLToPath(import.meta.url) === entrypointPath) {
-  run().catch((error: unknown) => {
+  runCli().catch((error: unknown) => {
     if (error instanceof CliError) {
       logger.error(error.message)
       process.exitCode = error.exitCode

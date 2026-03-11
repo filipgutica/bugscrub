@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -11,6 +11,7 @@ vi.mock('../../../src/runner/agent/process.js', () => ({
 
 import { CodexAdapter } from '../../../src/runner/agent/codex.js'
 import { runCommand } from '../../../src/runner/agent/process.js'
+import { CliError } from '../../../src/utils/errors.js'
 import type { RunContext } from '../../../src/runner/agent/types.js'
 
 const mockRunCommand = vi.mocked(runCommand)
@@ -151,6 +152,7 @@ describe('CodexAdapter', () => {
   it('runs Codex in read-only sandbox mode without dangerous-permissions config', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bugscrub-codex-test-'))
     tempDirectories.push(root)
+    await mkdir(join(root, 'debug'), { recursive: true })
     await writeFile(join(root, 'schema.json'), '{}\n', 'utf8')
 
     mockRunCommand.mockImplementation(async ({ args }) => {
@@ -169,9 +171,6 @@ describe('CodexAdapter', () => {
           evidence: {
             screenshots: [],
             networkLogs: []
-          },
-          raw: {
-            adapter: 'codex'
           }
         }),
         'utf8'
@@ -200,10 +199,57 @@ describe('CodexAdapter', () => {
           '--json',
           '--sandbox',
           'read-only'
-        ])
+        ]),
+        onStdout: expect.any(Function),
+        env: expect.not.objectContaining({
+          NODE_INSPECT_RESUME_ON_START: expect.anything(),
+          NODE_OPTIONS: expect.anything(),
+          VSCODE_INSPECTOR_OPTIONS: expect.anything()
+        })
       })
     )
     expect(result.result.status).toBe('passed')
     await expect(readFile(join(root, 'agent-transcript.jsonl'), 'utf8')).rejects.toBeDefined()
+  })
+
+  it('surfaces codex stdout and stderr and preserves the last-message artifact path on failure', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugscrub-codex-test-'))
+    tempDirectories.push(root)
+    await mkdir(join(root, 'debug'), { recursive: true })
+    await writeFile(join(root, 'schema.json'), '{}\n', 'utf8')
+
+    mockRunCommand.mockResolvedValue({
+      exitCode: 1,
+      stderr: 'fatal: codex backend error\n',
+      stdout: '{"event":"failed"}\n'
+    })
+
+    const adapter = new CodexAdapter()
+
+    await expect(
+      adapter.run(
+        createRunContext({
+          root
+        })
+      )
+    ).rejects.toMatchObject({
+      exitCode: 1,
+      message: expect.stringContaining('fatal: codex backend error')
+    })
+
+    try {
+      await adapter.run(
+        createRunContext({
+          root
+        })
+      )
+    } catch (error) {
+      expect(error).toBeInstanceOf(CliError)
+      expect((error as CliError).message).toContain('stdout:')
+      expect((error as CliError).message).toContain('stderr:')
+      expect((error as CliError).message).toContain(
+        join(root, 'debug', 'codex-last-message.json')
+      )
+    }
   })
 })

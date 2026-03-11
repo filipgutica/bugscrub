@@ -148,9 +148,6 @@ describe('ClaudeAdapter', () => {
         evidence: {
           screenshots: [],
           networkLogs: []
-        },
-        raw: {
-          adapter: 'claude'
         }
       })
     })

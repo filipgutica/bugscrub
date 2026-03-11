@@ -102,7 +102,6 @@ export type RunContext = BaseRunContext & {
 }
 
 export type AdapterRunArtifacts = {
-  raw: Record<string, unknown> | undefined
   stdout: string
   stderr: string
 }

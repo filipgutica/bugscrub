@@ -4,6 +4,9 @@ import { nameSchema, nonEmptyStringSchema } from './common.js'
 
 export const authConfigSchema = z.union([
   z.object({
+    type: z.literal('none')
+  }),
+  z.object({
     type: z.literal('env'),
     usernameEnvVar: nonEmptyStringSchema,
     passwordEnvVar: nonEmptyStringSchema

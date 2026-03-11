@@ -6,6 +6,9 @@ import type { SurfaceBundle } from '../core/loader.js'
 import type { BugScrubConfig, WorkflowConfig } from '../types/index.js'
 import { fileExists, readTextFile } from '../utils/fs.js'
 
+// Generate helpers infer deterministic workflow drafts from local repo signals.
+// They deliberately avoid agent calls so repeated runs over the same tree stay
+// predictable and easy to review in git.
 const IGNORED_DIRECTORIES = new Set([
   '.bugscrub',
   '.git',
@@ -105,6 +108,8 @@ export const buildDraftFromSurface = ({
     .map((capability) => ({
       capability: capability.name
     }))
+  // Non-login capabilities become exploration tasks by default so the generated
+  // draft is immediately runnable once the surface definition exists.
   const tasks = surface.capabilities
     .filter((capability) => capability.name !== 'login')
     .map((capability) => ({
@@ -236,6 +241,8 @@ export const listRepoFiles = async ({
       const absolutePath = join(directoryPath, entry.name)
 
       if (entry.isDirectory()) {
+        // Keep traversal explicit instead of relying on glob libraries so tests
+        // can pin exact inclusion and ordering behavior.
         if (!IGNORED_DIRECTORIES.has(entry.name)) {
           await visit(absolutePath)
         }

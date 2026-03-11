@@ -68,6 +68,8 @@ export const writeDrafts = async ({
     })
   }))
 
+  // Overwrite checks are performed before any write so multi-draft generation
+  // fails atomically instead of partially updating the workflow directory.
   if (!force) {
     for (const target of targets) {
       if (await fileExists({ path: target.path })) {

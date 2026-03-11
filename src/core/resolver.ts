@@ -7,9 +7,13 @@ import type {
   SignalConfig,
   WorkflowConfig
 } from '../types/index.js'
+import { normalizeRequirement } from '../runner/requirements.js'
 import { ValidationError } from '../utils/errors.js'
 import type { SurfaceBundle } from './loader.js'
 
+// Resolver turns independently valid files into a cross-referenced definition.
+// The key job here is to surface repo-authoring mistakes before `run` starts
+// building prompts or invoking an adapter.
 type ValidationIssue = {
   path: string
   message: string
@@ -48,6 +52,8 @@ export const buildResolvedSurface = ({
   const assertionMap = new Map<string, AssertionConfig>()
   const signalMap = new Map<string, SignalConfig>()
 
+  // Directory name is part of the product surface because generated workflow
+  // references and repo navigation both assume the folder matches surface.name.
   if (bundle.directoryName !== bundle.surface.name) {
     pushIssue({
       issues,
@@ -216,6 +222,16 @@ const validateWorkflow = ({
     })
   }
 
+  for (const requirement of workflow.requires) {
+    if (!normalizeRequirement({ requirement })) {
+      pushIssue({
+        issues,
+        path: basename(workflowPath),
+        message: `requires contains unsupported capability requirement "${requirement}".`
+      })
+    }
+  }
+
   for (const assertionName of workflow.hard_assertions) {
     if (!surface.assertionMap.has(assertionName)) {
       pushIssue({
@@ -239,6 +255,8 @@ export const validateWorkspaceDefinition = ({
   const issues: ValidationIssue[] = []
   const surfaceMap = new Map<string, ResolvedSurface>()
 
+  // Validation is intentionally two-pass: first normalize every surface into
+  // lookup maps, then validate workflows against that stable catalog.
   for (const bundle of surfaces) {
     const resolved = buildResolvedSurface({
       bundle,

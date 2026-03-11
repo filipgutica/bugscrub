@@ -44,6 +44,26 @@ describe('validateAssertionCoverage', () => {
     ).toEqual([])
   })
 
+  it('accepts namespaced assertion result identifiers', () => {
+    expect(
+      validateAssertionCoverage({
+        assertions,
+        results: [
+          {
+            assertion: 'api_requests.page_not_blank',
+            status: 'passed',
+            summary: 'Visible.'
+          },
+          {
+            assertion: 'api_requests.requests_visible',
+            status: 'passed',
+            summary: 'Visible.'
+          }
+        ]
+      }).issues
+    ).toEqual([])
+  })
+
   it('reports missing and unexpected assertions', () => {
     expect(
       validateAssertionCoverage({

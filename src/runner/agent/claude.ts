@@ -76,9 +76,6 @@ export class ClaudeAdapter implements AgentAdapter {
 
     return {
       artifacts: {
-        raw: {
-          response: parsed
-        },
         stderr: command.stderr,
         stdout: command.stdout
       },

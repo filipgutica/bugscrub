@@ -8,6 +8,7 @@ describe('buildCli', () => {
 
     expect(cli.commands.map((command) => command.name())).toEqual([
       'init',
+      'setup',
       'discover',
       'validate',
       'generate',

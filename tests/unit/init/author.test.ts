@@ -10,6 +10,7 @@ vi.mock('../../../src/runner/agent/process.js', () => ({
 }))
 
 import {
+  authorWorkspace,
   createAuthoringEnv,
   pinAuthoringAgentPreference,
   renderTranscriptText,
@@ -20,14 +21,16 @@ import {
 } from '../../../src/init/author.js'
 import { CliError } from '../../../src/utils/errors.js'
 import { stripAnsi } from '../../../src/utils/logger.js'
-import { isCommandAvailable } from '../../../src/runner/agent/process.js'
+import { isCommandAvailable, runCommand } from '../../../src/runner/agent/process.js'
 
 const mockIsCommandAvailable = vi.mocked(isCommandAvailable)
+const mockRunCommand = vi.mocked(runCommand)
 const tempDirectories: string[] = []
 
 afterEach(() => {
   vi.restoreAllMocks()
   mockIsCommandAvailable.mockReset()
+  mockRunCommand.mockReset()
   return Promise.all(
     tempDirectories.splice(0).map((directory) =>
       rm(directory, { recursive: true, force: true })
@@ -367,5 +370,187 @@ describe('syncAuthoredWorkspace', () => {
     })
 
     expect(await readFile(join(cwd, 'src', 'App.tsx'), 'utf8')).toBe('export const App = () => null\n')
+  })
+})
+
+describe('authorWorkspace', () => {
+  it('feeds isolated validation failures back into the next authoring attempt before syncing', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'bugscrub-author-loop-'))
+    tempDirectories.push(cwd)
+
+    await mkdir(join(cwd, '.bugscrub'), { recursive: true })
+    await writeFile(
+      join(cwd, '.bugscrub', 'bugscrub.config.yaml'),
+      [
+        'version: "0"',
+        'project: app',
+        'defaultEnv: local',
+        'envs:',
+        '  local:',
+        '    baseUrl: http://localhost:3000',
+        '    defaultIdentity: user',
+        '    identities:',
+        '      user:',
+        '        auth:',
+        '          type: token-env',
+        '          tokenEnvVar: BUGSCRUB_TOKEN',
+        'agent:',
+        '  preferred: codex',
+        '  timeout: 300',
+        '  maxBudgetUsd: 5'
+      ].join('\n'),
+      'utf8'
+    )
+    await writeFile(join(cwd, 'package.json'), '{ "name": "app" }\n', 'utf8')
+
+    mockIsCommandAvailable.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+
+    let authoringAttempt = 0
+    const authorPrompts: string[] = []
+
+    mockRunCommand.mockImplementation(async ({ args, command, cwd: commandCwd }) => {
+      if (command === 'codex') {
+        authoringAttempt += 1
+        authorPrompts.push(args.at(-1) ?? '')
+
+        await Promise.all([
+          mkdir(join(commandCwd!, '.bugscrub', 'surfaces', 'settings'), {
+            recursive: true
+          }),
+          mkdir(join(commandCwd!, '.bugscrub', 'workflows'), {
+            recursive: true
+          })
+        ])
+
+        await Promise.all([
+          writeFile(
+            join(commandCwd!, '.bugscrub', 'surfaces', 'settings', 'surface.yaml'),
+            [
+              'name: settings',
+              'routes:',
+              '  - /settings',
+              'elements:',
+              '  settings_page:',
+              '    test_id: settings-page',
+              'capabilities:',
+              '  - open_settings'
+            ].join('\n'),
+            'utf8'
+          ),
+          writeFile(
+            join(commandCwd!, '.bugscrub', 'surfaces', 'settings', 'capabilities.yaml'),
+            [
+              '- name: open_settings',
+              '  description: Open the settings page.',
+              '  preconditions: []',
+              '  guidance:',
+              '    - Navigate to the settings page.',
+              '  success_signals: []',
+              '  failure_signals: []'
+            ].join('\n'),
+            'utf8'
+          ),
+          writeFile(
+            join(commandCwd!, '.bugscrub', 'surfaces', 'settings', 'assertions.yaml'),
+            [
+              '- name: settings_page_visible',
+              '  kind: dom_presence',
+              '  description: The settings page is visible.',
+              '  match:',
+              '    test_id: settings-page'
+            ].join('\n'),
+            'utf8'
+          ),
+          writeFile(
+            join(commandCwd!, '.bugscrub', 'surfaces', 'settings', 'signals.yaml'),
+            '[]\n',
+            'utf8'
+          ),
+          writeFile(
+            join(commandCwd!, '.bugscrub', 'workflows', 'settings-exploration.yaml'),
+            [
+              'name: settings-exploration',
+              'target:',
+              '  surface: settings',
+              '  env: local',
+              'setup: []',
+              'exploration:',
+              '  tasks:',
+              `    - capability: ${authoringAttempt === 1 ? 'missing_capability' : 'open_settings'}`,
+              '      min: 1',
+              '      max: 1',
+              'hard_assertions:',
+              '  - settings_page_visible',
+              'evidence:',
+              '  screenshots: true',
+              '  network_logs: false'
+            ].join('\n'),
+            'utf8'
+          )
+        ])
+
+        return {
+          exitCode: 0,
+          stderr: '',
+          stdout: `authored attempt ${authoringAttempt}\n`
+        }
+      }
+
+      if (command === 'bugscrub' && args[0] === 'validate') {
+        const workflowSource = await readFile(
+          join(commandCwd!, '.bugscrub', 'workflows', 'settings-exploration.yaml'),
+          'utf8'
+        )
+        const isValid = workflowSource.includes('capability: open_settings')
+
+        return {
+          exitCode: isValid ? 0 : 1,
+          stderr: '',
+          stdout: isValid
+            ? 'bugscrub Validation passed.\n'
+            : 'Validation failed with 1 issue:\n- settings-exploration.yaml: exploration.tasks[0] references missing capability "missing_capability" on surface "settings".\n'
+        }
+      }
+
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`)
+    })
+
+    const result = await authorWorkspace({
+      config: {
+        version: '0',
+        project: 'app',
+        defaultEnv: 'local',
+        envs: {
+          local: {
+            baseUrl: 'http://localhost:3000',
+            defaultIdentity: 'user',
+            identities: {
+              user: {
+                auth: {
+                  type: 'token-env',
+                  tokenEnvVar: 'BUGSCRUB_TOKEN'
+                }
+              }
+            }
+          }
+        },
+        agent: {
+          preferred: 'codex',
+          timeout: 300,
+          maxBudgetUsd: 5
+        }
+      },
+      cwd,
+      prompt: 'Create repo-specific surfaces and workflows.'
+    })
+
+    expect(authorPrompts).toHaveLength(2)
+    expect(authorPrompts[1]).toContain('# Validation feedback')
+    expect(authorPrompts[1]).toContain('missing_capability')
+    expect(authorPrompts[1]).toContain('Use `bugscrub schema <type>`')
+    expect(result.stdout).toContain('Validation failed with 1 issue')
+    expect(await readFile(join(cwd, '.bugscrub', 'workflows', 'settings-exploration.yaml'), 'utf8')).toContain(
+      'capability: open_settings'
+    )
   })
 })

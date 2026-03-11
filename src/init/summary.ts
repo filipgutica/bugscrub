@@ -60,7 +60,7 @@ export const renderInitReport = ({
     '- Surface and workflow YAML files were intentionally left for the agent to author.',
     usesPlaceholderBaseUrl
       ? '- `local.baseUrl` is a placeholder and must be replaced before running workflows.'
-      : '- `local.baseUrl` was seeded from the detected framework default.',
+      : '- `local.baseUrl` was inferred from the detected framework and can be edited if this repo uses a different local dev URL.',
     ''
   ]
 

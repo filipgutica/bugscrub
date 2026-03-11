@@ -6,6 +6,7 @@ import {
   hardAssertionsSection,
   outputFormatSection,
   roleSection,
+  runtimePreparationSection,
   sessionSetupSection,
   targetSection
 } from './sections.js'
@@ -23,6 +24,7 @@ export const buildPrompt = ({
       roleSection(),
       `Target runtime: \`${adapterName}\``,
       targetSection({ context }),
+      runtimePreparationSection({ context }),
       authenticationSection({ context }),
       sessionSetupSection({ context }),
       explorationSection({ context }),

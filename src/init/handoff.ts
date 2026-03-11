@@ -15,8 +15,9 @@ const formatRepoContext = ({
 }
 
 const AUTHORING_GUARDRAILS = [
-  '- Do not run `bugscrub init`, `bugscrub discover`, `bugscrub generate`, `bugscrub run`, or `bugscrub schema` from inside this authoring task.',
-  '- Only use `bugscrub validate` to check the files you authored.',
+  '- Do not run `bugscrub init`, `bugscrub discover`, `bugscrub generate`, or `bugscrub run` from inside this authoring task.',
+  '- Use `bugscrub schema <type>` when you need the exact shipped schema for config, workflow, surface, capability, assertion, or signal files.',
+  '- Use `bugscrub validate` to check the files you authored and fix any reported issues before finishing.',
   '- Stay within the selected package and its `.bugscrub/` workspace; do not inspect or modify unrelated tools, parent directories, or sibling directories.'
 ] as const
 

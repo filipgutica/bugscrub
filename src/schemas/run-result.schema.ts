@@ -26,8 +26,7 @@ export const runResultSchema = z.object({
     screenshots: z.array(nonEmptyStringSchema).default([]),
     networkLogs: z.array(nonEmptyStringSchema).default([])
   }),
-  transcriptPath: nonEmptyStringSchema.optional(),
-  raw: z.record(z.string(), z.unknown()).optional()
+  transcriptPath: nonEmptyStringSchema.optional()
 })
 
 export const runResultJsonSchema = {
@@ -166,11 +165,91 @@ export const runResultJsonSchema = {
         transcriptPath: {
           type: 'string',
           minLength: 1
-        },
-        raw: {
-          type: 'object'
         }
       }
     }
   }
 } as const
+
+type JsonSchema = {
+  additionalProperties?: boolean
+  enum?: readonly string[]
+  format?: string
+  items?: JsonSchema
+  minLength?: number
+  minimum?: number
+  properties?: Record<string, JsonSchema> | Readonly<Record<string, JsonSchema>>
+  required?: readonly string[]
+  type?: string | string[]
+}
+
+const makeCodexNullable = ({ schema }: { schema: JsonSchema }): JsonSchema => {
+  if (!schema.type) {
+    return schema
+  }
+
+  const types = Array.isArray(schema.type) ? schema.type : [schema.type]
+
+  if (types.includes('null')) {
+    return schema
+  }
+
+  return {
+    ...schema,
+    type: [...types, 'null']
+  }
+}
+
+const toCodexCompatibleSchema = ({ schema }: { schema: JsonSchema }): JsonSchema => {
+  const transformedItems = schema.items
+    ? toCodexCompatibleSchema({
+        schema: schema.items
+      })
+    : undefined
+
+  const transformedProperties = schema.properties
+    ? Object.fromEntries(
+        Object.entries(schema.properties).map(([key, propertySchema]) => {
+          const transformedProperty = toCodexCompatibleSchema({
+            schema: propertySchema
+          })
+          const requiredKeys = new Set(schema.required ?? [])
+
+          return [
+            key,
+            requiredKeys.has(key)
+              ? transformedProperty
+              : makeCodexNullable({
+                  schema: transformedProperty
+                })
+          ]
+        })
+      )
+    : undefined
+
+  if (!transformedProperties) {
+    return {
+      ...schema,
+      ...(transformedItems
+        ? {
+            items: transformedItems
+          }
+        : {})
+    }
+  }
+
+  return {
+    ...schema,
+    ...(transformedItems
+      ? {
+          items: transformedItems
+        }
+      : {}),
+    properties: transformedProperties,
+    required: Object.keys(transformedProperties)
+  }
+}
+
+export const codexRunResultJsonSchema = toCodexCompatibleSchema({
+  schema: runResultJsonSchema.definitions.runResultSchema
+})

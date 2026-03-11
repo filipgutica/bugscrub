@@ -12,6 +12,10 @@ const formatIdentity = ({
 }: {
   identity: ResolvedIdentity
 }): string => {
+  if (identity.auth.type === 'none') {
+    return `${identity.name}: no authentication required`
+  }
+
   if (identity.auth.type === 'env') {
     return `${identity.name}: username in \`${identity.auth.usernameEnvVar}\`, password in \`${identity.auth.passwordEnvVar}\``
   }
@@ -88,6 +92,20 @@ const formatAssertion = ({
   return `- \`${assertion.namespacedName}\`: ${assertion.description} (${assertion.kind}; ${matcher})`
 }
 
+const isLocalBaseUrl = ({
+  baseUrl
+}: {
+  baseUrl: string
+}): boolean => {
+  try {
+    const parsed = new URL(baseUrl)
+
+    return parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1'
+  } catch {
+    return false
+  }
+}
+
 export const roleSection = (): string => {
   return [
     '## Role framing',
@@ -122,6 +140,28 @@ export const authenticationSection = ({
     `- Default identity: \`${context.environment.defaultIdentity.name}\``,
     ...context.environment.identities.map((identity) => `- ${formatIdentity({ identity })}`)
   ].join('\n')
+}
+
+export const runtimePreparationSection = ({
+  context
+}: {
+  context: BaseRunContext
+}): string => {
+  const lines = ['## Runtime preparation']
+
+  if (isLocalBaseUrl({ baseUrl: context.environment.baseUrl })) {
+    lines.push(
+      `- Before opening the browser, verify that \`${context.environment.baseUrl}\` is reachable.`,
+      '- If the local app is unavailable, stop and report that the repo dev server is not running instead of continuing blindly.'
+    )
+  } else {
+    lines.push(
+      `- Verify that \`${context.environment.baseUrl}\` is reachable before spending time on browser exploration.`,
+      '- If the target is unavailable, fail the run with a clear explanation instead of continuing blindly.'
+    )
+  }
+
+  return lines.join('\n')
 }
 
 export const sessionSetupSection = ({
@@ -183,6 +223,15 @@ export const hardAssertionsSection = ({
 }: {
   context: BaseRunContext
 }): string => {
+  if (context.hardAssertions.length === 0) {
+    return [
+      '## Hard assertions checklist',
+      'This workflow has no hard assertions.',
+      'Set `assertionResults` to an empty array in the final JSON output.',
+      'Do not put capability names, task names, or free-form checks into `assertionResults`.'
+    ].join('\n')
+  }
+
   return [
     '## Hard assertions checklist',
     'You must verify every assertion and include one `assertionResults` entry per assertion in the final JSON output.',

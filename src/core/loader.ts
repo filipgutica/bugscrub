@@ -19,6 +19,9 @@ import { fileExists, readTextFile } from '../utils/fs.js'
 import { parseYaml } from '../utils/yaml.js'
 import { getRepoPaths } from './paths.js'
 
+// Loader is the filesystem boundary for repo-authored YAML.
+// It reads each file family separately so validation errors stay tied to the
+// exact source file instead of being deferred until runtime resolution.
 type SurfaceBundle = {
   directoryName: string
   directoryPath: string
@@ -154,6 +157,8 @@ export const loadWorkspaceFiles = async ({
       )
   ])
 
+  // Surface directories are intentionally loaded as bundles because the four
+  // YAML files are validated independently but resolved together later on.
   const surfaces = await Promise.all(
     surfaceEntries
       .filter((entry) => entry.isDirectory())

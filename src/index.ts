@@ -21,6 +21,10 @@ export const buildCli = (): Command => {
       'Schema-driven CLI for capability-bounded exploratory bug scrub workflows.'
     )
     .version('0.0.0')
+    .option(
+      '--filter <workspace>',
+      'Target a pnpm workspace package by exact package name or relative path.'
+    )
     .exitOverride()
 
   registerInitCommand(program)

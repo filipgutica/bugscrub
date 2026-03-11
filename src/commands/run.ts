@@ -1,5 +1,6 @@
 import { Command } from 'commander'
 
+import { selectWorkspacePackage } from '../init/package-selection.js'
 import { executeRun } from '../runner/index.js'
 import { CliError } from '../utils/errors.js'
 import { logger } from '../utils/logger.js'
@@ -20,16 +21,22 @@ const parsePositiveInt = (value: string): number => {
 export const runRunCommand = async ({
   cwd,
   dryRun,
+  filter,
   maxSteps,
   workflow
 }: {
   cwd: string
   dryRun: boolean
+  filter?: string
   maxSteps: number | undefined
   workflow: string | undefined
 }): Promise<void> => {
-  const result = await executeRun({
+  const { packageRoot } = await selectWorkspacePackage({
     cwd,
+    ...(filter ? { filter } : {})
+  })
+  const result = await executeRun({
+    cwd: packageRoot,
     dryRun,
     maxSteps,
     workflow
@@ -55,12 +62,20 @@ export const registerRunCommand = (program: Command): void => {
     )
     .option('--dry-run', 'Validate run inputs without launching an agent.')
     .option('--max-steps <count>', 'Override `agent.maxSteps` for this run.', parsePositiveInt)
-    .action(async (options: { dryRun?: boolean; maxSteps?: number; workflow?: string }) => {
+    .action(
+      async (
+        options: { dryRun?: boolean; maxSteps?: number; workflow?: string },
+        command: Command
+      ) => {
+        const globals = command.optsWithGlobals() as { filter?: string }
+
       await runRunCommand({
         cwd: process.cwd(),
         dryRun: options.dryRun ?? false,
+        ...(globals.filter ? { filter: globals.filter } : {}),
         maxSteps: options.maxSteps,
         workflow: options.workflow
       })
-    })
+      }
+    )
 }

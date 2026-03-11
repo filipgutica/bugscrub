@@ -18,6 +18,7 @@ export const runInitCommand = async ({
   cwd,
   dryRun,
   editor,
+  filter,
   selectPackage = promptForPackageSelection
 }: {
   authorRepo?: (args: {
@@ -28,10 +29,12 @@ export const runInitCommand = async ({
   cwd: string
   dryRun: boolean
   editor: 'vscode' | undefined
+  filter?: string
   selectPackage?: (args: { packages: WorkspacePackage[] }) => Promise<WorkspacePackage>
 }): Promise<void> => {
   const { packageRoot, selectedPackage } = await selectWorkspacePackage({
     cwd,
+    ...(filter ? { filter } : {}),
     selectPackage
   })
   const bugscrubPath = `${packageRoot}/.bugscrub`
@@ -140,11 +143,14 @@ export const registerInitCommand = (program: Command): void => {
         return value as 'vscode'
       }
     )
-    .action(async (options: { dryRun?: boolean; editor?: 'vscode' }) => {
+    .action(async (options: { dryRun?: boolean; editor?: 'vscode' }, command: Command) => {
+      const globals = command.optsWithGlobals() as { filter?: string }
+
       await runInitCommand({
         cwd: process.cwd(),
         dryRun: options.dryRun ?? false,
-        editor: options.editor
+        editor: options.editor,
+        ...(globals.filter ? { filter: globals.filter } : {})
       })
     })
 }

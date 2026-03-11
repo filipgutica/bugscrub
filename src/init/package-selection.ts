@@ -1,9 +1,10 @@
 import { basename } from 'node:path'
-import { createInterface } from 'node:readline/promises'
 
 import { CliError } from '../utils/errors.js'
+import { promptForChoice } from '../utils/tty-select.js'
 import { detectWorkspace, type WorkspacePackage } from './detector.js'
 
+// Workspace selection is shared by package-scoped commands in monorepos.
 export const promptForPackageSelection = async ({
   packages
 }: {
@@ -28,49 +29,59 @@ export const promptForPackageSelection = async ({
     })
   }
 
-  const prompt = createInterface({
-    input: process.stdin,
-    output: process.stdout
+  return promptForChoice({
+    choices: packages.map((pkg) => ({
+      label: `${pkg.packageName ?? basename(pkg.path)} (${pkg.relativePath})`,
+      value: pkg
+    })),
+    title: 'Select a pnpm workspace package:'
   })
-
-  try {
-    process.stdout.write('Select a pnpm workspace package to scan:\n')
-    packages.forEach((pkg, index) => {
-      process.stdout.write(
-        `${index + 1}. ${pkg.packageName ?? basename(pkg.path)} (${pkg.relativePath})\n`
-      )
-    })
-
-    while (true) {
-      const answer = await prompt.question('Package number: ')
-      const index = Number.parseInt(answer, 10)
-
-      if (Number.isInteger(index) && index >= 1 && index <= packages.length) {
-        return packages[index - 1]!
-      }
-
-      process.stdout.write(`Enter a number between 1 and ${packages.length}.\n`)
-    }
-  } finally {
-    prompt.close()
-  }
 }
 
 export const selectWorkspacePackage = async ({
   cwd,
+  filter,
   selectPackage = promptForPackageSelection
 }: {
   cwd: string
+  filter?: string
   selectPackage?: (args: { packages: WorkspacePackage[] }) => Promise<WorkspacePackage>
 }): Promise<{
   packageRoot: string
   selectedPackage: WorkspacePackage | undefined
 }> => {
   const workspace = await detectWorkspace({ cwd })
-  const selectedPackage =
-    workspace.isPnpmWorkspace && workspace.packages.length > 1
-      ? await selectPackage({ packages: workspace.packages })
-      : workspace.packages[0]
+  let selectedPackage: WorkspacePackage | undefined
+
+  if (filter) {
+    const matches = workspace.packages.filter(
+      (pkg) => pkg.packageName === filter || pkg.relativePath === filter
+    )
+
+    if (matches.length === 0) {
+      throw new CliError({
+        message: `No pnpm workspace package matched "${filter}".`,
+        exitCode: 1
+      })
+    }
+
+    if (matches.length > 1) {
+      throw new CliError({
+        message: [
+          `Multiple pnpm workspace packages matched "${filter}".`,
+          'Use the relative path to disambiguate.'
+        ].join('\n'),
+        exitCode: 1
+      })
+    }
+
+    selectedPackage = matches[0]
+  } else {
+    selectedPackage =
+      workspace.isPnpmWorkspace && workspace.packages.length > 1
+        ? await selectPackage({ packages: workspace.packages })
+        : workspace.packages[0]
+  }
 
   return {
     packageRoot: selectedPackage?.path ?? cwd,

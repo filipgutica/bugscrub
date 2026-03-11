@@ -64,6 +64,42 @@ bugscrub schema
 - `run` executes a workflow through a compatible agent adapter.
 - `schema` prints JSON Schemas for inspection and debugging.
 
+## Quickstart
+
+```bash
+pnpm install
+pnpm build
+pnpm dev -- init
+pnpm dev -- validate
+pnpm dev -- generate
+pnpm dev -- run --workflow .bugscrub/workflows/api-requests.yaml --dry-run
+```
+
+In a pnpm monorepo, package-scoped commands support a top-level `--filter` flag:
+
+```bash
+pnpm dev -- --filter apps/web init
+pnpm dev -- --filter workspace-web generate --from-route /settings
+pnpm dev -- --filter apps/admin validate
+```
+
+## Generate Examples
+
+```bash
+pnpm dev -- generate
+pnpm dev -- generate --from-route /settings --dry-run
+pnpm dev -- generate --from-workflow .bugscrub/workflows/api-requests.yaml --dry-run
+```
+
+`bugscrub generate` without a source flag opens an interactive picker with:
+
+- current local changes against `HEAD`
+- current branch compared to `main`
+- current branch compared to another branch
+- existing repo tests
+
+Route generation reuses an existing surface when `.bugscrub/surfaces/*/surface.yaml` has an exact route match. Otherwise it writes a draft against an inferred stub surface name and leaves TODO capability markers in the workflow.
+
 ## Repo Layout
 
 Planned project structure:

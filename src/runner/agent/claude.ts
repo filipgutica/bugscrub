@@ -4,6 +4,10 @@ import { runCommand, isCommandAvailable } from './process.js'
 import type { AdapterRunOutput, AgentAdapter, AgentCapabilities, RunContext } from './types.js'
 import { parseRunResultOutput } from './result.js'
 
+// Default to Sonnet for BugScrub because these runs need reliable tool use and
+// instruction-following, but usually not Opus-level reasoning cost.
+const DEFAULT_CLAUDE_MODEL = 'sonnet'
+
 const claudeCapabilities: AgentCapabilities = {
   browser: {
     navigation: true,
@@ -34,14 +38,6 @@ export class ClaudeAdapter implements AgentAdapter {
   }
 
   public async run(context: RunContext): Promise<AdapterRunOutput> {
-    if (!context.config.agent.allowDangerousPermissions) {
-      throw new CliError({
-        message:
-          'Claude Code runs require `agent.allowDangerousPermissions: true` in `.bugscrub/bugscrub.config.yaml`.',
-        exitCode: 1
-      })
-    }
-
     const schema = JSON.stringify(getJsonSchemaByType({ type: 'run-result' }))
     const command = await runCommand({
       command: 'claude',
@@ -51,9 +47,14 @@ export class ClaudeAdapter implements AgentAdapter {
         '--print',
         '--output-format',
         'json',
+        '--model',
+        DEFAULT_CLAUDE_MODEL,
         '--json-schema',
         schema,
-        '--dangerously-skip-permissions',
+        '--permission-mode',
+        'acceptEdits',
+        '--disallowedTools',
+        'Edit,MultiEdit,NotebookEdit,Write',
         '--max-budget-usd',
         String(context.maxBudgetUsd),
         context.prompt

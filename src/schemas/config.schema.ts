@@ -34,8 +34,7 @@ export const bugScrubConfigSchema = z
       preferred: z.enum(['auto', 'claude', 'codex']).default('auto'),
       timeout: z.number().int().positive(),
       maxBudgetUsd: z.number().positive(),
-      maxSteps: z.number().int().positive().optional(),
-      allowDangerousPermissions: z.boolean().optional()
+      maxSteps: z.number().int().positive().optional()
     })
   })
   .superRefine(({ defaultEnv, envs }, context) => {

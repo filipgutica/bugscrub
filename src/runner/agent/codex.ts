@@ -1,9 +1,15 @@
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { CliError } from '../../utils/errors.js'
 import { runCommand, isCommandAvailable } from './process.js'
 import type { AdapterRunOutput, AgentAdapter, AgentCapabilities, RunContext } from './types.js'
 import { parseRunResultOutput } from './result.js'
+
+// Default to the Codex-optimized frontier model rather than the global CLI default.
+// This keeps BugScrub on a strong coding model without paying the highest-tier general-model cost.
+const DEFAULT_CODEX_MODEL = 'gpt-5.3-codex'
 
 const codexCapabilities: AgentCapabilities = {
   browser: {
@@ -35,45 +41,57 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   public async run(context: RunContext): Promise<AdapterRunOutput> {
-    const command = await runCommand({
-      command: 'codex',
-      cwd: context.cwd,
-      timeoutMs: context.timeoutSeconds * 1_000,
-      args: [
-        'exec',
-        '--full-auto',
-        '--json',
-        '--skip-git-repo-check',
-        '--output-schema',
-        context.artifacts.responseSchemaPath,
-        '--output-last-message',
-        context.artifacts.transcriptPath,
-        context.prompt
-      ]
-    })
+    const outputRoot = await mkdtemp(join(tmpdir(), 'bugscrub-codex-run-'))
+    const outputMessagePath = join(outputRoot, 'last-message.json')
 
-    if (command.exitCode !== 0) {
-      throw new CliError({
-        message: `Codex failed with exit code ${command.exitCode}.\n${command.stderr.trim()}`,
-        exitCode: 1
+    try {
+      const command = await runCommand({
+        command: 'codex',
+        cwd: context.cwd,
+        timeoutMs: context.timeoutSeconds * 1_000,
+        args: [
+          'exec',
+          '--model',
+          DEFAULT_CODEX_MODEL,
+          '--json',
+          '--sandbox',
+          'read-only',
+          '--output-schema',
+          context.artifacts.responseSchemaPath,
+          '--output-last-message',
+          outputMessagePath,
+          context.prompt
+        ]
       })
-    }
 
-    const finalMessage = await readFile(context.artifacts.transcriptPath, 'utf8')
-    const { parsed, result } = parseRunResultOutput({
-      agent: 'codex',
-      output: finalMessage
-    })
+      if (command.exitCode !== 0) {
+        throw new CliError({
+          message: `Codex failed with exit code ${command.exitCode}.\n${command.stderr.trim()}`,
+          exitCode: 1
+        })
+      }
 
-    return {
-      artifacts: {
-        raw: {
-          response: parsed
+      const finalMessage = await readFile(outputMessagePath, 'utf8')
+      const { parsed, result } = parseRunResultOutput({
+        agent: 'codex',
+        output: finalMessage
+      })
+
+      return {
+        artifacts: {
+          raw: {
+            response: parsed
+          },
+          stderr: command.stderr,
+          stdout: command.stdout
         },
-        stderr: command.stderr,
-        stdout: command.stdout
-      },
-      result
+        result
+      }
+    } finally {
+      await rm(outputRoot, {
+        force: true,
+        recursive: true
+      })
     }
   }
 }

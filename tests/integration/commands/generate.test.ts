@@ -188,4 +188,55 @@ describe('runGenerateCommand', () => {
     expect(output).toContain('Source: current local changes')
     expect(output).toContain('surface: api_requests')
   })
+
+  it('includes untracked files in local diff generation', async () => {
+    const repoPath = await createTempRepo({
+      fixtureName: 'workspace-valid'
+    })
+    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+
+    await initializeGitRepo({
+      cwd: repoPath
+    })
+    await mkdir(join(repoPath, 'tests'), { recursive: true })
+    await writeFile(
+      join(repoPath, 'package.json'),
+      JSON.stringify({
+        name: 'workspace-valid',
+        devDependencies: {
+          '@playwright/test': '^1.50.0'
+        }
+      }),
+      'utf8'
+    )
+    await writeFile(
+      join(repoPath, 'tests', 'new-surface.spec.ts'),
+      [
+        "import { test } from '@playwright/test'",
+        '',
+        "test('new surface', async ({ page }) => {",
+        "  await page.goto('/new-surface')",
+        '})',
+        ''
+      ].join('\n'),
+      'utf8'
+    )
+
+    await runGenerateCommand({
+      cwd: repoPath,
+      dryRun: true,
+      force: false,
+      promptForSource: async () => ({
+        kind: 'diff',
+        diffMode: {
+          kind: 'local'
+        }
+      })
+    })
+
+    const output = stdoutSpy.mock.calls.map((call) => String(call[0])).join('')
+
+    expect(output).toContain('surface: new_surface')
+    expect(output).toContain('TODO_define_capability_for_new_surface')
+  })
 })

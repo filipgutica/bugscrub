@@ -12,6 +12,7 @@ import { registerValidateCommand } from './commands/validate.js'
 import { CliError } from './utils/errors.js'
 import { logger } from './utils/logger.js'
 
+// CLI entrypoint wires shared globals and all user-facing subcommands together.
 export const buildCli = (): Command => {
   const program = new Command()
 

@@ -1,16 +1,22 @@
-import { chmod, cp, mkdtemp, rename, rm } from 'node:fs/promises'
+import { chmod, cp, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
-import * as readline from 'node:readline'
+import { basename, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import chalk from 'chalk'
 import type { BugScrubConfig } from '../types/index.js'
 import { CliError } from '../utils/errors.js'
-import { logger } from '../utils/logger.js'
-import { writeTextFile } from '../utils/fs.js'
+import { parseYaml, stringifyYaml } from '../utils/yaml.js'
+import {
+  getTerminalWidth,
+  logger,
+  wrapTerminalText
+} from '../utils/logger.js'
+import { fileExists, writeTextFile } from '../utils/fs.js'
+import { promptForChoice } from '../utils/tty-select.js'
 import { runCommand, isCommandAvailable } from '../runner/agent/process.js'
 
+// Authoring runs the selected agent in an isolated workspace and streams a readable transcript.
 export type InitAuthorAgent = 'claude' | 'codex'
 
 export type InitAuthorResult = {
@@ -20,186 +26,485 @@ export type InitAuthorResult = {
   stdout: string
 }
 
+const BUGSCRUB_PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url))
+
+type AuthoringWorkspaceConfig = BugScrubConfig & {
+  agent: BugScrubConfig['agent'] & {
+    preferred: InitAuthorAgent
+  }
+}
+
 const AUTHORING_STRIPPED_ENV_VARS = [
   'NODE_INSPECT_RESUME_ON_START',
   'NODE_OPTIONS',
   'VSCODE_INSPECTOR_OPTIONS'
 ] as const
 
+const AUTHORING_ALLOWED_ENV_KEYS = new Set([
+  'APPDATA',
+  'CI',
+  'COLORTERM',
+  'COMSPEC',
+  'FORCE_COLOR',
+  'HOME',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'HTTPS_PROXY',
+  'HTTP_PROXY',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'LOCALAPPDATA',
+  'LOGNAME',
+  'NO_COLOR',
+  'NO_PROXY',
+  'PATH',
+  'SHELL',
+  'SystemRoot',
+  'TEMP',
+  'TERM',
+  'TMP',
+  'TMPDIR',
+  'USER',
+  'USERNAME',
+  'USERPROFILE',
+  'XDG_CACHE_HOME',
+  'XDG_CONFIG_HOME',
+  'XDG_STATE_HOME'
+])
+
+const AUTHORING_ALLOWED_ENV_PREFIXES = [
+  'ANTHROPIC_',
+  'AWS_',
+  'CLAUDE_CODE_',
+  'OPENAI_'
+] as const
+
+const AUTHORING_SENSITIVE_ENV_PATTERNS = [
+  /TOKEN/i,
+  /SECRET/i,
+  /PASSWORD/i,
+  /KEY/i
+] as const
+
+const AUTHORING_EXCLUDED_NAMES = new Set([
+  '.aws',
+  '.env',
+  '.git',
+  '.gnupg',
+  '.npmrc',
+  '.pnpmrc',
+  '.ssh',
+  '.terraform',
+  '.yarnrc',
+  '.yarnrc.yml',
+  'id_ed25519',
+  'id_rsa',
+  'node_modules'
+])
+
+const AUTHORING_EXCLUDED_PATTERNS = [
+  /^\.env\./i,
+  /^service-account.*\.json$/i,
+  /\.(?:cer|crt|der|key|kdbx|p12|pem|pfx)$/i
+] as const
+
+const NOISY_DIFF_FILE_PATTERNS = [
+  /(?:^|\/)(?:dist|build|coverage)\//i,
+  /\.(?:map|min\.(?:css|js))$/i,
+  /(?:^|\/)(?:package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/i
+] as const
+
+type TranscriptFormattingState = {
+  collapsedNoisyDiff: boolean
+  currentDiffFile: string | undefined
+  inCodeBlock: boolean
+}
+
+// Authoring is synthesis-heavy but still routine enough that we should not pay top-tier
+// model cost by default. Use the mainstream coding tiers unless we later expose a user
+// override with clearer product semantics.
+const DEFAULT_AUTHORING_CLAUDE_MODEL = 'sonnet'
+const DEFAULT_AUTHORING_CODEX_MODEL = 'gpt-5.3-codex'
+
 const promptForAgentSelection = async ({
   agents
 }: {
   agents: InitAuthorAgent[]
 }): Promise<InitAuthorAgent> => {
-  const input = process.stdin
-  const output = process.stdout
-  let selectedIndex = 0
-  let lineCount = 0
-  let rendered = false
+  return promptForChoice({
+    choices: agents.map((agent) => ({
+      label: chalk.bold(agent),
+      value: agent
+    })),
+    footer: chalk.gray('Use up/down arrows and press Enter.'),
+    title: 'Select an authoring agent:'
+  })
+}
 
-  const render = (): void => {
-    const lines = [
-      'Select an authoring agent:',
-      ...agents.map((agent, index) =>
-        `${index === selectedIndex ? chalk.cyan('>') : ' '} ${index === selectedIndex ? chalk.bold(agent) : agent}`
-      ),
-      chalk.gray('Use up/down arrows and press Enter.')
-    ]
+const isNoisyDiffFile = ({
+  path
+}: {
+  path: string | undefined
+}): boolean => {
+  return path
+    ? NOISY_DIFF_FILE_PATTERNS.some((pattern) => pattern.test(path))
+    : false
+}
 
-    if (rendered) {
-      output.write(`\x1b[${lineCount}F`)
-    } else {
-      output.write('\x1b[?25l')
-    }
-
-    for (const line of lines) {
-      output.write(`\x1b[2K${line}\n`)
-    }
-
-    lineCount = lines.length
-    rendered = true
+const looksGeneratedOrMinified = ({
+  line,
+  width
+}: {
+  line: string
+  width: number
+}): boolean => {
+  if (line.length < width * 2) {
+    return false
   }
 
-  try {
-    readline.emitKeypressEvents(input)
+  const whitespaceCount = [...line].filter((character) => /\s/.test(character)).length
+  const punctuationCount = [...line].filter((character) =>
+    /[{}()[\].,;:=<>/+*-]/.test(character)
+  ).length
 
-    if (typeof input.setRawMode === 'function') {
-      input.setRawMode(true)
+  return whitespaceCount < line.length / 20 && punctuationCount >= 8
+}
+
+const truncateDisplayLine = ({
+  line,
+  width
+}: {
+  line: string
+  width: number
+}): string => {
+  const previewWidth = Math.max(24, width - ' ... [truncated for display]'.length)
+
+  if (line.length <= previewWidth) {
+    return line
+  }
+
+  return `${line.slice(0, previewWidth).trimEnd()} ... [truncated for display]`
+}
+
+const wrapStyledText = ({
+  hangingIndent = '',
+  initialIndent = '',
+  style,
+  text,
+  width
+}: {
+  hangingIndent?: string
+  initialIndent?: string
+  style: (value: string) => string
+  text: string
+  width: number
+}): string[] => {
+  return wrapTerminalText({
+    hangingIndent,
+    initialIndent,
+    text,
+    width
+  }).map((segment) => style(segment))
+}
+
+const createTranscriptFormattingState = (): TranscriptFormattingState => ({
+  collapsedNoisyDiff: false,
+  currentDiffFile: undefined,
+  inCodeBlock: false
+})
+
+export const createTranscriptFormatter = ({
+  width = getTerminalWidth()
+}: {
+  width?: number
+} = {}) => {
+  const state = createTranscriptFormattingState()
+
+  const formatLine = ({
+    line,
+    stderr
+  }: {
+    line: string
+    stderr: boolean
+  }): string[] => {
+    if (line.length === 0) {
+      return ['']
     }
 
-    render()
+    const diffHeaderMatch = line.match(/^diff --git a\/(.+?) b\/(.+)$/)
 
-    return await new Promise<InitAuthorAgent>((resolve, reject) => {
-      const onKeypress = (_: string, key: readline.Key): void => {
-        if (key.name === 'up') {
-          selectedIndex = selectedIndex === 0 ? agents.length - 1 : selectedIndex - 1
-          render()
-          return
-        }
+    if (diffHeaderMatch) {
+      state.currentDiffFile = diffHeaderMatch[2]
+      state.collapsedNoisyDiff = false
+      return wrapStyledText({
+        style: chalk.bold.yellow,
+        text: line,
+        width
+      })
+    }
 
-        if (key.name === 'down') {
-          selectedIndex = selectedIndex === agents.length - 1 ? 0 : selectedIndex + 1
-          render()
-          return
-        }
-
-        if (key.name === 'return') {
-          input.off('keypress', onKeypress)
-          resolve(agents[selectedIndex]!)
-          return
-        }
-
-        if (key.ctrl && key.name === 'c') {
-          input.off('keypress', onKeypress)
-          reject(
-            new CliError({
-              message: 'Agent selection was cancelled.',
-              exitCode: 1
-            })
-          )
-        }
-      }
-
-      input.on('keypress', onKeypress)
+    const isNoisyDiff = isNoisyDiffFile({
+      path: state.currentDiffFile
     })
-  } finally {
-    if (typeof input.setRawMode === 'function') {
-      input.setRawMode(false)
+
+    if (line.trim().startsWith('```')) {
+      state.inCodeBlock = !state.inCodeBlock
+      return wrapStyledText({
+        style: chalk.gray,
+        text: line.trim(),
+        width
+      })
     }
 
-    if (rendered) {
-      output.write(`\x1b[${lineCount}F`)
-      for (let index = 0; index < lineCount; index += 1) {
-        output.write('\x1b[2K\n')
+    if (
+      isNoisyDiff &&
+      (line.startsWith('+') || line.startsWith('-')) &&
+      !line.startsWith('+++') &&
+      !line.startsWith('---')
+    ) {
+      // Generated bundles and lockfiles are useful to log, but not useful to stream verbatim.
+      if (state.collapsedNoisyDiff) {
+        return []
       }
-      output.write(`\x1b[${lineCount}F`)
-      output.write('\x1b[?25h')
+
+      state.collapsedNoisyDiff = true
+      return [
+        chalk.gray(`... generated diff content for ${state.currentDiffFile} truncated for display`)
+      ]
     }
+
+    const lower = line.toLowerCase()
+
+    if (line === 'codex' || line === 'claude') {
+      return wrapStyledText({
+        style: chalk.bold.blue,
+        text: line,
+        width
+      })
+    }
+
+    if (
+      lower.includes('error') ||
+      lower.includes('failed') ||
+      lower.includes('fatal') ||
+      lower.startsWith('err:')
+    ) {
+      return wrapStyledText({
+        style: chalk.red,
+        text: line,
+        width
+      })
+    }
+
+    if (lower.includes('warning') || lower.startsWith('warn:')) {
+      return wrapStyledText({
+        style: chalk.yellow,
+        text: line,
+        width
+      })
+    }
+
+    if (stderr) {
+      return wrapStyledText({
+        style: chalk.gray,
+        text:
+          looksGeneratedOrMinified({
+            line,
+            width
+          })
+            ? truncateDisplayLine({
+                line,
+                width
+              })
+            : line,
+        width
+      })
+    }
+
+    if (line === 'exec' || line === 'file update:' || line === 'tokens used') {
+      return wrapStyledText({
+        style: chalk.bold.magenta,
+        text: line,
+        width
+      })
+    }
+
+    if (line.startsWith('+++ ')) {
+      return wrapStyledText({
+        style: chalk.green,
+        text: line,
+        width
+      })
+    }
+
+    if (line.startsWith('--- ')) {
+      return wrapStyledText({
+        style: chalk.red,
+        text: line,
+        width
+      })
+    }
+
+    if (line.startsWith('@@')) {
+      return wrapStyledText({
+        style: chalk.cyan,
+        text: line,
+        width
+      })
+    }
+
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      return wrapStyledText({
+        hangingIndent: ' ',
+        initialIndent: '+',
+        style: chalk.green,
+        text: looksGeneratedOrMinified({
+          line,
+          width
+        })
+          ? truncateDisplayLine({
+              line: line.slice(1),
+              width
+            })
+          : line.slice(1),
+        width
+      })
+    }
+
+    if (line.startsWith('-') && !line.startsWith('---')) {
+      return wrapStyledText({
+        hangingIndent: ' ',
+        initialIndent: '-',
+        style: chalk.red,
+        text: looksGeneratedOrMinified({
+          line,
+          width
+        })
+          ? truncateDisplayLine({
+              line: line.slice(1),
+              width
+            })
+          : line.slice(1),
+        width
+      })
+    }
+
+    if (line.startsWith('# ')) {
+      return wrapStyledText({
+        style: chalk.bold.cyan,
+        text: line,
+        width
+      })
+    }
+
+    if (line.startsWith('## ') || line.startsWith('### ')) {
+      return wrapStyledText({
+        style: chalk.bold,
+        text: line,
+        width
+      })
+    }
+
+    if (line.startsWith('- ') || line.startsWith('* ')) {
+      return wrapStyledText({
+        hangingIndent: '  ',
+        initialIndent: `${line[0]} `,
+        style: (value) => value,
+        text: line.slice(2),
+        width
+      })
+    }
+
+    if (/^\d+\.\s/.test(line)) {
+      const marker = line.match(/^\d+\.\s/)?.[0] ?? ''
+      return wrapStyledText({
+        hangingIndent: ' '.repeat(marker.length),
+        initialIndent: marker,
+        style: (value) => value,
+        text: line.slice(marker.length),
+        width
+      })
+    }
+
+    if (line.startsWith('bugscrub ')) {
+      const wrapped = wrapTerminalText({
+        hangingIndent: '         ',
+        initialIndent: '',
+        text: line.slice('bugscrub '.length),
+        width: width - 'bugscrub '.length
+      })
+
+      return wrapped.map((segment, index) =>
+        index === 0 ? `${chalk.blue('bugscrub')} ${segment}` : `         ${segment}`
+      )
+    }
+
+    if (state.inCodeBlock) {
+      return wrapStyledText({
+        hangingIndent: '  ',
+        initialIndent: '  ',
+        style: chalk.gray,
+        text: line,
+        width
+      })
+    }
+
+    if (line.startsWith('/bin/') || line.startsWith('.bugscrub/') || line.startsWith('index ')) {
+      return wrapStyledText({
+        style: chalk.gray,
+        text: line,
+        width
+      })
+    }
+
+    return wrapStyledText({
+      style: (value) => value,
+      text:
+        looksGeneratedOrMinified({
+          line,
+          width
+        })
+          ? truncateDisplayLine({
+              line,
+              width
+            })
+          : line,
+      width
+    })
+  }
+
+  return {
+    formatLine
   }
 }
 
-const formatTranscriptLine = ({
-  line,
-  stderr
+export const renderTranscriptText = ({
+  stderr,
+  text,
+  width
 }: {
-  line: string
   stderr: boolean
+  text: string
+  width?: number
 }): string => {
-  if (line.length === 0) {
-    return ''
-  }
+  const formatter = createTranscriptFormatter({
+    ...(width ? { width } : {})
+  })
 
-  const lower = line.toLowerCase()
-
-  if (line === 'codex' || line === 'claude') {
-    return chalk.bold.blue(line)
-  }
-
-  if (
-    lower.includes('error') ||
-    lower.includes('failed') ||
-    lower.includes('fatal') ||
-    lower.startsWith('err:')
-  ) {
-    return chalk.red(line)
-  }
-
-  if (lower.includes('warning') || lower.startsWith('warn:')) {
-    return chalk.yellow(line)
-  }
-
-  if (stderr) {
-    return chalk.gray(line)
-  }
-
-  if (line === 'exec' || line === 'file update:' || line === 'tokens used') {
-    return chalk.bold.magenta(line)
-  }
-
-  if (line.startsWith('diff --git ')) {
-    return chalk.bold.yellow(line)
-  }
-
-  if (line.startsWith('+++ ')) {
-    return chalk.green(line)
-  }
-
-  if (line.startsWith('--- ')) {
-    return chalk.red(line)
-  }
-
-  if (line.startsWith('@@')) {
-    return chalk.cyan(line)
-  }
-
-  if (line.startsWith('+') && !line.startsWith('+++')) {
-    return chalk.green(line)
-  }
-
-  if (line.startsWith('-') && !line.startsWith('---')) {
-    return chalk.red(line)
-  }
-
-  if (line.startsWith('# ')) {
-    return chalk.bold.cyan(line)
-  }
-
-  if (line.startsWith('## ') || line.startsWith('### ')) {
-    return chalk.bold(line)
-  }
-
-  if (line.startsWith('bugscrub ')) {
-    return `${chalk.blue('bugscrub')} ${line.slice('bugscrub '.length)}`
-  }
-
-  if (line.startsWith('/bin/') || line.startsWith('.bugscrub/') || line.startsWith('index ')) {
-    return chalk.gray(line)
-  }
-
-  return line
+  return text
+    .split('\n')
+    .flatMap((line) =>
+      formatter.formatLine({
+        line,
+        stderr
+      })
+    )
+    .join('\n')
 }
 
 const createTranscriptRenderer = () => {
+  const formatter = createTranscriptFormatter()
   let stdoutBuffer = ''
   let stderrBuffer = ''
 
@@ -214,12 +519,15 @@ const createTranscriptRenderer = () => {
     const remainder = lines.pop() ?? ''
 
     for (const line of lines) {
-      const formatted = formatTranscriptLine({
-        line,
-        stderr
-      })
       const stream = stderr ? process.stderr : process.stdout
-      stream.write(`${formatted}\n`)
+      formatter
+        .formatLine({
+          line,
+          stderr
+        })
+        .forEach((formatted) => {
+          stream.write(`${formatted}\n`)
+        })
     }
 
     return remainder
@@ -228,22 +536,26 @@ const createTranscriptRenderer = () => {
   return {
     flush: (): void => {
       if (stdoutBuffer.length > 0) {
-        process.stdout.write(
-          `${formatTranscriptLine({
+        formatter
+          .formatLine({
             line: stdoutBuffer,
             stderr: false
-          })}\n`
-        )
+          })
+          .forEach((formatted) => {
+            process.stdout.write(`${formatted}\n`)
+          })
         stdoutBuffer = ''
       }
 
       if (stderrBuffer.length > 0) {
-        process.stderr.write(
-          `${formatTranscriptLine({
+        formatter
+          .formatLine({
             line: stderrBuffer,
             stderr: true
-          })}\n`
-        )
+          })
+          .forEach((formatted) => {
+            process.stderr.write(`${formatted}\n`)
+          })
         stderrBuffer = ''
       }
     },
@@ -357,11 +669,13 @@ export const selectAuthoringAgent = async ({
 const writeAuthoringLog = async ({
   agent,
   cwd,
+  env,
   stderr,
   stdout
 }: {
   agent: InitAuthorAgent
   cwd: string
+  env: NodeJS.ProcessEnv
   stderr: string
   stdout: string
 }): Promise<string> => {
@@ -372,10 +686,20 @@ const writeAuthoringLog = async ({
       `# Authoring log (${agent})`,
       '',
       '## stdout',
-      stdout.length > 0 ? stdout : '(empty)',
+      stdout.length > 0
+        ? redactSensitiveText({
+            env,
+            text: stdout
+          })
+        : '(empty)',
       '',
       '## stderr',
-      stderr.length > 0 ? stderr : '(empty)',
+      stderr.length > 0
+        ? redactSensitiveText({
+            env,
+            text: stderr
+          })
+        : '(empty)',
       ''
     ].join('\n')
   })
@@ -383,9 +707,45 @@ const writeAuthoringLog = async ({
   return logPath
 }
 
-const copyFilter = (source: string): boolean => {
+export const redactSensitiveText = ({
+  env,
+  text
+}: {
+  env: NodeJS.ProcessEnv
+  text: string
+}): string => {
+  let redacted = text
+
+  for (const [key, value] of Object.entries(env)) {
+    if (
+      typeof value === 'string' &&
+      value.length >= 6 &&
+      AUTHORING_SENSITIVE_ENV_PATTERNS.some((pattern) => pattern.test(key))
+    ) {
+      redacted = redacted.split(value).join(`[REDACTED:${key}]`)
+    }
+  }
+
+  return redacted
+}
+
+export const shouldCopyAuthoringPath = ({
+  source
+}: {
+  source: string
+}): boolean => {
   const relativePath = basename(source)
-  return relativePath !== '.git' && relativePath !== 'node_modules'
+
+  return (
+    !AUTHORING_EXCLUDED_NAMES.has(relativePath) &&
+    !AUTHORING_EXCLUDED_PATTERNS.some((pattern) => pattern.test(relativePath))
+  )
+}
+
+const copyFilter = (source: string): boolean => {
+  return shouldCopyAuthoringPath({
+    source
+  })
 }
 
 export const createAuthoringEnv = ({
@@ -395,8 +755,19 @@ export const createAuthoringEnv = ({
   baseEnv?: NodeJS.ProcessEnv
   pathPrefix: string
 }): NodeJS.ProcessEnv => {
-  const env = {
-    ...(baseEnv ?? process.env)
+  const sourceEnv = baseEnv ?? process.env
+  const env: NodeJS.ProcessEnv = {}
+
+  // Keep the subprocess environment intentionally small so agent runs do not inherit
+  // unrelated local secrets or shell configuration by default.
+  for (const [key, value] of Object.entries(sourceEnv)) {
+    if (
+      value !== undefined &&
+      (AUTHORING_ALLOWED_ENV_KEYS.has(key) ||
+        AUTHORING_ALLOWED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix)))
+    ) {
+      env[key] = value
+    }
   }
 
   for (const key of AUTHORING_STRIPPED_ENV_VARS) {
@@ -408,9 +779,34 @@ export const createAuthoringEnv = ({
   return env
 }
 
+export const pinAuthoringAgentPreference = async ({
+  agent,
+  tempWorkspaceRoot
+}: {
+  agent: InitAuthorAgent
+  tempWorkspaceRoot: string
+}): Promise<void> => {
+  const configPath = join(tempWorkspaceRoot, '.bugscrub', 'bugscrub.config.yaml')
+  const configSource = await readFile(configPath, 'utf8')
+  const parsedConfig = parseYaml<AuthoringWorkspaceConfig>(configSource)
+
+  await writeTextFile({
+    path: configPath,
+    contents: stringifyYaml({
+      ...parsedConfig,
+      agent: {
+        ...parsedConfig.agent,
+        preferred: agent
+      }
+    })
+  })
+}
+
 const createIsolatedWorkspace = async ({
+  agent,
   cwd
 }: {
+  agent: InitAuthorAgent
   cwd: string
 }): Promise<{
   cleanup: () => Promise<void>
@@ -420,22 +816,64 @@ const createIsolatedWorkspace = async ({
   const sessionRoot = await mkdtemp(join(tmpdir(), 'bugscrub-author-'))
   const tempWorkspaceRoot = join(sessionRoot, 'workspace')
   const tempBinRoot = join(sessionRoot, 'bin')
-  const cliEntryPath = fileURLToPath(new URL('../index.ts', import.meta.url))
-  const tsxImportPath = fileURLToPath(import.meta.resolve('tsx'))
+  const tempCliRoot = join(sessionRoot, 'bugscrub-cli')
   const wrapperPath = join(tempBinRoot, 'bugscrub')
+  const packagedCliEntryPath = join(tempCliRoot, 'dist', 'index.js')
+  const sourceCliEntryPath = join(tempCliRoot, 'src', 'index.ts')
+  const hasPackagedCli = await fileExists({
+    path: join(BUGSCRUB_PROJECT_ROOT, 'dist', 'index.js')
+  })
 
+  await mkdir(tempCliRoot, {
+    recursive: true
+  })
   await cp(cwd, tempWorkspaceRoot, {
     filter: copyFilter,
     recursive: true
   })
+  await symlink(join(BUGSCRUB_PROJECT_ROOT, 'node_modules'), join(tempCliRoot, 'node_modules'))
+
+  if (hasPackagedCli) {
+    await Promise.all([
+      cp(join(BUGSCRUB_PROJECT_ROOT, 'dist'), join(tempCliRoot, 'dist'), {
+        recursive: true
+      }),
+      cp(join(BUGSCRUB_PROJECT_ROOT, 'package.json'), join(tempCliRoot, 'package.json'))
+    ])
+  } else {
+    await Promise.all([
+      cp(join(BUGSCRUB_PROJECT_ROOT, 'src'), join(tempCliRoot, 'src'), {
+        recursive: true
+      }),
+      writeTextFile({
+        path: join(tempCliRoot, 'package.json'),
+        contents: JSON.stringify(
+          {
+            name: 'bugscrub-authoring-cli',
+            private: true,
+            type: 'module'
+          },
+          null,
+          2
+        )
+      })
+    ])
+  }
+
   await writeTextFile({
     path: wrapperPath,
-    contents: [
-      '#!/bin/sh',
-      `exec node --import "${tsxImportPath}" "${cliEntryPath}" "$@"`
-    ].join('\n')
+    contents: hasPackagedCli
+      ? ['#!/bin/sh', `exec node "${packagedCliEntryPath}" "$@"`].join('\n')
+      : [
+          '#!/bin/sh',
+          `exec node --import "${join(tempCliRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs')}" "${sourceCliEntryPath}" "$@"`
+        ].join('\n')
   })
   await chmod(wrapperPath, 0o755)
+  await pinAuthoringAgentPreference({
+    agent,
+    tempWorkspaceRoot
+  })
 
   return {
     cleanup: async () => {
@@ -451,6 +889,108 @@ const createIsolatedWorkspace = async ({
   }
 }
 
+const listScopedAuthoringFiles = async ({
+  includeExcludedSourceFiles = false,
+  root
+}: {
+  includeExcludedSourceFiles?: boolean
+  root: string
+}): Promise<string[]> => {
+  const visit = async ({
+    currentPath
+  }: {
+    currentPath: string
+  }): Promise<string[]> => {
+    const entries = await readdir(currentPath, {
+      withFileTypes: true
+    })
+    const files: string[] = []
+
+    for (const entry of entries) {
+      const entryPath = join(currentPath, entry.name)
+      const relativePath = relative(root, entryPath).split('\\').join('/')
+
+      if (relativePath === '.bugscrub' || relativePath.startsWith('.bugscrub/')) {
+        continue
+      }
+
+      if (!includeExcludedSourceFiles && !shouldCopyAuthoringPath({ source: entryPath })) {
+        continue
+      }
+
+      if (entry.isDirectory()) {
+        files.push(
+          ...(await visit({
+            currentPath: entryPath
+          }))
+        )
+        continue
+      }
+
+      if (entry.isFile()) {
+        files.push(relativePath)
+      }
+    }
+
+    return files
+  }
+
+  return visit({
+    currentPath: root
+  })
+}
+
+const assertScopedAuthoringChanges = async ({
+  cwd,
+  tempWorkspaceRoot
+}: {
+  cwd: string
+  tempWorkspaceRoot: string
+}): Promise<void> => {
+  const [sourceFiles, authoredFiles] = await Promise.all([
+    listScopedAuthoringFiles({
+      root: cwd
+    }),
+    listScopedAuthoringFiles({
+      includeExcludedSourceFiles: true,
+      root: tempWorkspaceRoot
+    })
+  ])
+  const sourceSet = new Set(sourceFiles)
+  const authoredSet = new Set(authoredFiles)
+  const candidatePaths = [...new Set([...sourceFiles, ...authoredFiles])].sort((left, right) =>
+    left.localeCompare(right)
+  )
+  const unexpectedChanges: string[] = []
+
+  for (const candidatePath of candidatePaths) {
+    if (!sourceSet.has(candidatePath) || !authoredSet.has(candidatePath)) {
+      unexpectedChanges.push(candidatePath)
+      continue
+    }
+
+    const [sourceContents, authoredContents] = await Promise.all([
+      readFile(join(cwd, candidatePath), 'utf8'),
+      readFile(join(tempWorkspaceRoot, candidatePath), 'utf8')
+    ])
+
+    if (sourceContents !== authoredContents) {
+      unexpectedChanges.push(candidatePath)
+    }
+  }
+
+  if (unexpectedChanges.length > 0) {
+    throw new CliError({
+      message: [
+        'Authoring agents may inspect the repo, but BugScrub only accepts changes under `.bugscrub/`.',
+        'Unexpected edits were detected outside `.bugscrub/`:',
+        ...unexpectedChanges.map((path) => `- ${path}`)
+      ].join('\n'),
+      exitCode: 1
+    })
+  }
+}
+
 export const syncAuthoredWorkspace = async ({
   cwd,
   tempWorkspaceRoot
@@ -458,6 +998,11 @@ export const syncAuthoredWorkspace = async ({
   cwd: string
   tempWorkspaceRoot: string
 }): Promise<void> => {
+  await assertScopedAuthoringChanges({
+    cwd,
+    tempWorkspaceRoot
+  })
+
   const realBugscrubRoot = join(cwd, '.bugscrub')
   const tempBugscrubRoot = join(tempWorkspaceRoot, '.bugscrub')
   const syncRoot = await mkdtemp(join(cwd, '.bugscrub-sync-'))
@@ -513,6 +1058,7 @@ const runCodexAuthoring = async ({
   timeoutSeconds: number
 }): Promise<InitAuthorResult> => {
   const isolatedWorkspace = await createIsolatedWorkspace({
+    agent: 'codex',
     cwd
   })
   const renderer = createTranscriptRenderer()
@@ -520,7 +1066,15 @@ const runCodexAuthoring = async ({
 
   try {
     result = await runCommand({
-      args: ['exec', '--full-auto', '--skip-git-repo-check', prompt],
+      args: [
+        'exec',
+        '--model',
+        DEFAULT_AUTHORING_CODEX_MODEL,
+        '--sandbox',
+        'workspace-write',
+        '--skip-git-repo-check',
+        prompt
+      ],
       command: 'codex',
       cwd: isolatedWorkspace.tempWorkspaceRoot,
       env: isolatedWorkspace.env,
@@ -559,6 +1113,7 @@ const runCodexAuthoring = async ({
   const logPath = await writeAuthoringLog({
     agent: 'codex',
     cwd,
+    env: isolatedWorkspace.env,
     stderr: result.stderr,
     stdout: result.stdout
   })
@@ -572,19 +1127,18 @@ const runCodexAuthoring = async ({
 }
 
 const runClaudeAuthoring = async ({
-  allowDangerousPermissions,
   cwd,
   maxBudgetUsd,
   prompt,
   timeoutSeconds
 }: {
-  allowDangerousPermissions: boolean | undefined
   cwd: string
   maxBudgetUsd: number
   prompt: string
   timeoutSeconds: number
 }): Promise<InitAuthorResult> => {
   const isolatedWorkspace = await createIsolatedWorkspace({
+    agent: 'claude',
     cwd
   })
   const renderer = createTranscriptRenderer()
@@ -596,8 +1150,10 @@ const runClaudeAuthoring = async ({
         '--print',
         '--output-format',
         'text',
+        '--model',
+        DEFAULT_AUTHORING_CLAUDE_MODEL,
         '--permission-mode',
-        allowDangerousPermissions ? 'bypassPermissions' : 'acceptEdits',
+        'acceptEdits',
         '--max-budget-usd',
         String(maxBudgetUsd),
         prompt
@@ -640,6 +1196,7 @@ const runClaudeAuthoring = async ({
   const logPath = await writeAuthoringLog({
     agent: 'claude',
     cwd,
+    env: isolatedWorkspace.env,
     stderr: result.stderr,
     stdout: result.stdout
   })
@@ -686,7 +1243,6 @@ export const authorWorkspace = async ({
   }
 
   return runClaudeAuthoring({
-    allowDangerousPermissions: config.agent.allowDangerousPermissions,
     cwd,
     maxBudgetUsd: config.agent.maxBudgetUsd,
     prompt,

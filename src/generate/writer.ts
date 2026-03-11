@@ -6,6 +6,7 @@ import { stringifyYaml } from '../utils/yaml.js'
 import { CliError } from '../utils/errors.js'
 import type { DraftWorkflow } from './common.js'
 
+// Draft writer owns validation, comment rendering, and deterministic output paths.
 const renderComments = ({
   comments
 }: {

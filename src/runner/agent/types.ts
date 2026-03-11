@@ -10,6 +10,7 @@ import type {
 } from '../../types/index.js'
 import type { ResolvedSurface } from '../../core/resolver.js'
 
+// AgentAdapter types define the stable contract between BugScrub and external runtimes.
 export type AgentName = 'claude' | 'codex'
 
 export type AgentCapabilities = {

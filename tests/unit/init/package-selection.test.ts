@@ -68,4 +68,24 @@ describe('selectWorkspacePackage', () => {
       }
     })
   })
+
+  it('uses the workspace selector when multiple packages exist and no filter is provided', async () => {
+    const repoPath = await createTempRepo({
+      fixtureName: 'pnpm-workspace'
+    })
+
+    await expect(
+      selectWorkspacePackage({
+        cwd: repoPath,
+        selectPackage: async ({ packages }) =>
+          packages.find((pkg) => pkg.relativePath === 'apps/admin') ?? packages[0]!
+      })
+    ).resolves.toMatchObject({
+      packageRoot: join(repoPath, 'apps', 'admin'),
+      selectedPackage: {
+        packageName: 'workspace-admin',
+        relativePath: 'apps/admin'
+      }
+    })
+  })
 })

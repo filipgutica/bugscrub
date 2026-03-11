@@ -3,6 +3,7 @@ import type { BugScrubConfig } from '../types/index.js'
 import type { DraftWorkflow } from './common.js'
 import { buildDraftFromRoute } from './common.js'
 
+// Route-backed generation resolves a route into an existing or stub surface draft.
 export const generateDraftFromRoute = ({
   config,
   route,

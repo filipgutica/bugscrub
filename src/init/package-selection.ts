@@ -4,7 +4,7 @@ import { CliError } from '../utils/errors.js'
 import { promptForChoice } from '../utils/tty-select.js'
 import { detectWorkspace, type WorkspacePackage } from './detector.js'
 
-// Workspace selection is shared by package-scoped commands in monorepos.
+// Workspace selection centralizes monorepo targeting for package-scoped commands.
 export const promptForPackageSelection = async ({
   packages
 }: {

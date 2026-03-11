@@ -138,6 +138,37 @@ describe('runInitCommand', () => {
     ).resolves.toBeUndefined()
   })
 
+  it('targets a pnpm workspace package via --filter semantics without prompting', async () => {
+    const repoPath = await createTempRepo({
+      fixtureName: 'pnpm-workspace'
+    })
+    const selectPackage = vi.fn(async ({ packages }: { packages: Array<{ relativePath: string }> }) => {
+      return packages[0] as never
+    })
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+
+    await runInitCommand({
+      authorRepo: noopAuthorRepo,
+      cwd: repoPath,
+      dryRun: false,
+      editor: undefined,
+      filter: 'apps/web',
+      selectPackage
+    })
+
+    expect(selectPackage).not.toHaveBeenCalled()
+    expect(
+      await pathExists({
+        path: join(repoPath, 'apps', 'web', '.bugscrub', 'bugscrub.config.yaml')
+      })
+    ).toBe(true)
+    expect(
+      await pathExists({
+        path: join(repoPath, 'apps', 'admin', '.bugscrub', 'bugscrub.config.yaml')
+      })
+    ).toBe(false)
+  })
+
   it('falls back to a minimal TODO scaffold when no framework is detected', async () => {
     const repoPath = await createTempRepo({
       fixtureName: 'no-framework'

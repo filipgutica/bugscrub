@@ -15,4 +15,10 @@ describe('buildCli', () => {
       'schema'
     ])
   })
+
+  it('registers the global workspace filter option', () => {
+    const cli = buildCli()
+
+    expect(cli.options.some((option) => option.long === '--filter')).toBe(true)
+  })
 })

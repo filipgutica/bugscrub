@@ -14,6 +14,12 @@ const formatRepoContext = ({
   ]
 }
 
+const AUTHORING_GUARDRAILS = [
+  '- Do not run `bugscrub init`, `bugscrub discover`, `bugscrub generate`, `bugscrub run`, or `bugscrub schema` from inside this authoring task.',
+  '- Only use `bugscrub validate` to check the files you authored.',
+  '- Stay within the selected package and its `.bugscrub/` workspace; do not inspect or modify unrelated tools, parent directories, or sibling directories.'
+] as const
+
 export const buildInitAuthoringHandoff = ({
   context,
   selectedPackage
@@ -33,6 +39,7 @@ export const buildInitAuthoringHandoff = ({
     '- Create repo-specific workflows under `.bugscrub/workflows/`.',
     '- Keep all generated YAML valid against the shipped BugScrub schemas.',
     '- Run `bugscrub validate` after writing files and fix any reported issues.',
+    ...AUTHORING_GUARDRAILS,
     '',
     ...formatRepoContext({
       context
@@ -65,6 +72,7 @@ export const buildDiscoverAuthoringHandoff = ({
     '- Prefer filling coverage gaps over rewriting files that already exist.',
     '- Keep all generated YAML valid against the shipped BugScrub schemas.',
     '- Run `bugscrub validate` after writing files and fix any reported issues.',
+    ...AUTHORING_GUARDRAILS,
     '',
     `Existing surfaces: ${existingSurfaces.join(', ') || 'none'}`,
     `Existing workflows: ${existingWorkflows.join(', ') || 'none'}`,

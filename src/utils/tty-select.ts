@@ -2,6 +2,7 @@ import * as readline from 'node:readline'
 
 import { CliError } from './errors.js'
 
+// Minimal shared arrow-key picker used by interactive CLI flows.
 export const promptForChoice = async <T>({
   choices,
   footer,

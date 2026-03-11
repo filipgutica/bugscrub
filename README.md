@@ -131,6 +131,13 @@ This repository is currently in the v0 planning and implementation stage. The cu
 
 The immediate goal is a small, disciplined CLI with strict schemas, repo-local configuration, agent capability negotiation, and Markdown/JSON reporting.
 
+## Docs
+
+- [Architecture](/Users/filip.gutica@konghq.com/code/bugscrub/docs/architecture.md)
+- [AgentAdapter guide](/Users/filip.gutica@konghq.com/code/bugscrub/docs/agent-adapters.md)
+- [Source layout](/Users/filip.gutica@konghq.com/code/bugscrub/docs/source-layout.md)
+- [Intro](/Users/filip.gutica@konghq.com/code/bugscrub/docs/intro.md)
+
 ## Commit Workflow
 
 This repo expects Commitizen-style conventional commits.

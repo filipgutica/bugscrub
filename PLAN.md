@@ -433,7 +433,6 @@ agent:
   timeout: 300
   maxBudgetUsd: 5.00
   maxSteps: 20              # optional; also settable via --max-steps CLI flag (CLI overrides config)
-  allowDangerousPermissions: true  # required to invoke claude --dangerously-skip-permissions
 ```
 
 `BugScrubConfig` is repo-local and lives in `.bugscrub/bugscrub.config.yaml`. For v0, named identities are defined per repo/environment here; the global BugScrub home only stores user-level defaults and logs, not per-repo auth maps.
@@ -622,13 +621,13 @@ Detection is probe-then-select, not short-circuit. Multiple runtimes may be inst
 
 ### Claude Code Invocation
 
-> Requires `agent.allowDangerousPermissions: true` in `bugscrub.config.yaml`. If not set, `bugscrub run` fails with instructions to opt in. Only run against non-production or sandboxed environments.
+> `bugscrub run` should avoid dangerous permission bypass flags and use the least-permissive adapter mode available by default.
 
 ```bash
 claude \
   --print \
   --output-format stream-json \
-  --dangerously-skip-permissions \
+  --permission-mode acceptEdits \
   --max-budget-usd {maxBudgetUsd} \
   "{userPrompt}"
 ```

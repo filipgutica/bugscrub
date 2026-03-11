@@ -4,6 +4,7 @@ import { loadWorkflowFile } from '../core/loader.js'
 import type { DraftWorkflow } from './common.js'
 import { toKebabCase } from './common.js'
 
+// Workflow cloning preserves a known-good draft shape while forcing review via a new name.
 export const generateDraftFromWorkflow = async ({
   cwd,
   workflowPath

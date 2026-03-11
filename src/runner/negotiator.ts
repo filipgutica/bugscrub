@@ -1,6 +1,7 @@
 import { CliError } from '../utils/errors.js'
 import type { AgentCapabilities } from './agent/types.js'
 
+// Capability negotiation normalizes workflow requirements before an adapter run starts.
 const capabilityDefinitions: Record<
   string,
   {

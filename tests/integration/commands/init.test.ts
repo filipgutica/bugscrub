@@ -225,7 +225,7 @@ describe('runInitCommand', () => {
     const repoPath = await createTempRepo({
       fixtureName: 'simple-nextjs'
     })
-    vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
 
     const authorRepo = vi.fn(async ({ cwd, prompt }: { cwd: string; prompt: string }) => {
       await Promise.all([
@@ -305,6 +305,13 @@ describe('runInitCommand', () => {
 
       return {
         agent: 'codex' as const,
+        authoredFiles: [
+          '.bugscrub/surfaces/settings/surface.yaml',
+          '.bugscrub/surfaces/settings/capabilities.yaml',
+          '.bugscrub/surfaces/settings/assertions.yaml',
+          '.bugscrub/surfaces/settings/signals.yaml',
+          '.bugscrub/workflows/settings-exploration.yaml'
+        ],
         logPath: join(cwd, '.bugscrub', 'authoring-codex.log'),
         stderr: '',
         stdout: 'authored'
@@ -325,6 +332,12 @@ describe('runInitCommand', () => {
       await pathExists({
         path: join(repoPath, '.bugscrub', 'workflows', 'settings-exploration.yaml')
       })
+    ).toBe(true)
+
+    expect(
+      writeSpy.mock.calls.some(([value]) =>
+        String(value).includes('Files written: 8.')
+      )
     ).toBe(true)
   })
 })

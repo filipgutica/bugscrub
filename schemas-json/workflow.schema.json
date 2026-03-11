@@ -1,7 +1,145 @@
 {
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "$ref": "#/definitions/workflowSchema",
   "definitions": {
-    "workflowSchema": {}
-  },
-  "$schema": "http://json-schema.org/draft-07/schema#"
+    "workflowSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "surface": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "env": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          },
+          "required": [
+            "surface",
+            "env"
+          ],
+          "additionalProperties": false
+        },
+        "requires": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "setup": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "capability": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "as": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              }
+            },
+            "required": [
+              "capability"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "exploration": {
+          "type": "object",
+          "properties": {
+            "tasks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "capability": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9_-]+$"
+                  },
+                  "as": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9_-]+$"
+                  },
+                  "min": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "max": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "capability",
+                  "min",
+                  "max"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "tasks"
+          ],
+          "additionalProperties": false
+        },
+        "hard_assertions": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "properties": {
+            "screenshots": {
+              "type": "boolean"
+            },
+            "network_logs": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "screenshots",
+            "network_logs"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "name",
+        "target",
+        "requires",
+        "setup",
+        "exploration",
+        "hard_assertions",
+        "evidence"
+      ],
+      "additionalProperties": false
+    }
+  }
 }

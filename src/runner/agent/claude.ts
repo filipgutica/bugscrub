@@ -1,12 +1,7 @@
-import { getJsonSchemaByType } from '../../schemas/index.js'
+import { detectAvailableContainerAgents, runAgentInContainer } from '../../agent-runtime/container.js'
 import { CliError } from '../../utils/errors.js'
-import { runCommand, isCommandAvailable } from './process.js'
 import type { AdapterRunOutput, AgentAdapter, AgentCapabilities, RunContext } from './types.js'
 import { parseRunResultOutput } from './result.js'
-
-// Default to Sonnet for BugScrub because these runs need reliable tool use and
-// instruction-following, but usually not Opus-level reasoning cost.
-const DEFAULT_CLAUDE_MODEL = 'sonnet'
 
 const claudeCapabilities: AgentCapabilities = {
   browser: {
@@ -28,9 +23,8 @@ export class ClaudeAdapter implements AgentAdapter {
   public readonly name = 'claude' as const
 
   public async detect(): Promise<boolean> {
-    return isCommandAvailable({
-      command: 'claude'
-    })
+    const available = await detectAvailableContainerAgents()
+    return available.includes('claude')
   }
 
   public async getCapabilities(): Promise<AgentCapabilities> {
@@ -38,27 +32,20 @@ export class ClaudeAdapter implements AgentAdapter {
   }
 
   public async run(context: RunContext): Promise<AdapterRunOutput> {
-    const schema = JSON.stringify(getJsonSchemaByType({ type: 'run-result' }))
-    const command = await runCommand({
-      command: 'claude',
+    if (!context.containerSessionRoot) {
+      throw new CliError({
+        message: 'Claude runs now require a container session root.',
+        exitCode: 1
+      })
+    }
+
+    const command = await runAgentInContainer({
+      agent: 'claude',
       cwd: context.cwd,
-      timeoutMs: context.timeoutSeconds * 1_000,
-      args: [
-        '--print',
-        '--output-format',
-        'json',
-        '--model',
-        DEFAULT_CLAUDE_MODEL,
-        '--json-schema',
-        schema,
-        '--permission-mode',
-        'acceptEdits',
-        '--disallowedTools',
-        'Edit,MultiEdit,NotebookEdit,Write',
-        '--max-budget-usd',
-        String(context.maxBudgetUsd),
-        context.prompt
-      ]
+      prompt: context.prompt,
+      schemaPath: context.artifacts.responseSchemaPath,
+      sessionRoot: context.containerSessionRoot,
+      timeoutMs: context.timeoutSeconds * 1_000
     })
 
     if (command.exitCode !== 0) {
@@ -69,7 +56,7 @@ export class ClaudeAdapter implements AgentAdapter {
     }
 
     const trimmed = command.stdout.trim()
-    const { parsed, result } = parseRunResultOutput({
+    const { result } = parseRunResultOutput({
       agent: 'claude',
       output: trimmed
     })

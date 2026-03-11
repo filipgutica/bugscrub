@@ -1,22 +1,21 @@
 import { Command } from 'commander'
 import { readFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { resolve } from 'node:path'
 
 import { CliError } from '../utils/errors.js'
 import { fileExists, writeTextFile } from '../utils/fs.js'
 import { logger } from '../utils/logger.js'
+import { resolveInstalledPackageRoot } from '../utils/package-root.js'
 
 const LOCAL_DEV_BLOCK_START = '# >>> bugscrub local dev >>>'
 const LOCAL_DEV_BLOCK_END = '# <<< bugscrub local dev <<<'
-const PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url))
 
 const resolveLocalCliEntryPath = ({
-  projectRoot = PROJECT_ROOT
+  packageRoot
 }: {
-  projectRoot?: string
-} = {}): string => {
-  return resolve(projectRoot, 'dist', 'bugscrub')
+  packageRoot: string
+}): string => {
+  return resolve(packageRoot, 'dist', 'bugscrub')
 }
 
 const buildShellSetupBlock = ({
@@ -59,15 +58,20 @@ const replaceOrAppendShellSetupBlock = ({
 }
 
 export const runSetupCommand = async ({
-  projectRoot,
+  packageRoot,
   shellRcFile
 }: {
-  projectRoot?: string
+  packageRoot?: string
   shellRcFile: string
 }): Promise<void> => {
   const rcFilePath = resolve(shellRcFile)
+  const resolvedPackageRoot =
+    packageRoot ??
+    await resolveInstalledPackageRoot({
+      metaUrl: import.meta.url
+    })
   const cliEntryPath = resolveLocalCliEntryPath({
-    ...(projectRoot ? { projectRoot } : {})
+    packageRoot: resolvedPackageRoot
   })
 
   if (
@@ -124,6 +128,5 @@ export const setupCommandInternals = {
   replaceOrAppendShellSetupBlock,
   LOCAL_DEV_BLOCK_END,
   LOCAL_DEV_BLOCK_START,
-  PROJECT_ROOT,
   resolveLocalCliEntryPath
 }

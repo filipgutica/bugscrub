@@ -1,29 +1,33 @@
-import { chmod, cp, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { basename, join, relative } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { readFile } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 
 import chalk from 'chalk'
-import { createTranscriptRenderer, renderTranscriptText } from './transcript.js'
+
+import {
+  createDisposableWorkspace,
+  detectAvailableContainerAgents,
+  ensureDockerRuntime,
+  runAgentInContainer,
+  syncBugscrubWorkspace
+} from '../agent-runtime/container.js'
+import { runCommand } from '../runner/agent/process.js'
 import type { BugScrubConfig } from '../types/index.js'
 import { CliError } from '../utils/errors.js'
-import { parseYaml, stringifyYaml } from '../utils/yaml.js'
+import { writeTextFile } from '../utils/fs.js'
 import { logger } from '../utils/logger.js'
-import { fileExists, writeTextFile } from '../utils/fs.js'
 import { promptForChoice } from '../utils/tty-select.js'
-import { runCommand, isCommandAvailable } from '../runner/agent/process.js'
+import { parseYaml, stringifyYaml } from '../utils/yaml.js'
+import { createTranscriptRenderer, renderTranscriptText } from './transcript.js'
 
-// Authoring runs the selected agent in an isolated workspace and streams a readable transcript.
 export type InitAuthorAgent = 'claude' | 'codex'
 
 export type InitAuthorResult = {
   agent: InitAuthorAgent
+  authoredFiles?: string[]
   logPath: string
   stderr: string
   stdout: string
 }
-
-const BUGSCRUB_PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url))
 
 type AuthoringWorkspaceConfig = BugScrubConfig & {
   agent: BugScrubConfig['agent'] & {
@@ -74,6 +78,7 @@ const AUTHORING_ALLOWED_ENV_PREFIXES = [
   'ANTHROPIC_',
   'AWS_',
   'CLAUDE_CODE_',
+  'CODEX_',
   'OPENAI_'
 ] as const
 
@@ -106,11 +111,6 @@ const AUTHORING_EXCLUDED_PATTERNS = [
   /\.(?:cer|crt|der|key|kdbx|p12|pem|pfx)$/i
 ] as const
 
-// Authoring is synthesis-heavy but still routine enough that we should not pay top-tier
-// model cost by default. Use the mainstream coding tiers unless we later expose a user
-// override with clearer product semantics.
-const DEFAULT_AUTHORING_CLAUDE_MODEL = 'sonnet'
-const DEFAULT_AUTHORING_CODEX_MODEL = 'gpt-5.3-codex'
 const MAX_AUTHORING_VALIDATION_ATTEMPTS = 3
 
 const promptForAgentSelection = async ({
@@ -155,19 +155,7 @@ const buildValidationFeedbackPrompt = ({
 }
 
 const detectAvailableAgents = async (): Promise<InitAuthorAgent[]> => {
-  const [hasClaude, hasCodex] = await Promise.all([
-    isCommandAvailable({
-      command: 'claude'
-    }),
-    isCommandAvailable({
-      command: 'codex'
-    })
-  ])
-
-  return [
-    ...(hasClaude ? (['claude'] as const) : []),
-    ...(hasCodex ? (['codex'] as const) : [])
-  ]
+  return detectAvailableContainerAgents()
 }
 
 export const selectAuthoringAgent = async ({
@@ -187,7 +175,7 @@ export const selectAuthoringAgent = async ({
       message: [
         'No supported authoring agent runtime is available.',
         'Detected runtimes: none.',
-        'Install `claude` or `codex`, or update `agent.preferred` in `.bugscrub/bugscrub.config.yaml`.'
+        'Docker is required, and the selected agent must have either env-based auth or a readable CLI login available.'
       ].join('\n'),
       exitCode: 1
     })
@@ -320,12 +308,6 @@ export const shouldCopyAuthoringPath = ({
   )
 }
 
-const copyFilter = (source: string): boolean => {
-  return shouldCopyAuthoringPath({
-    source
-  })
-}
-
 export const createAuthoringEnv = ({
   baseEnv,
   pathPrefix
@@ -336,8 +318,6 @@ export const createAuthoringEnv = ({
   const sourceEnv = baseEnv ?? process.env
   const env: NodeJS.ProcessEnv = {}
 
-  // Keep the subprocess environment intentionally small so agent runs do not inherit
-  // unrelated local secrets or shell configuration by default.
   for (const [key, value] of Object.entries(sourceEnv)) {
     if (
       value !== undefined &&
@@ -380,249 +360,16 @@ export const pinAuthoringAgentPreference = async ({
   })
 }
 
-const createIsolatedWorkspace = async ({
-  agent,
-  cwd
-}: {
-  agent: InitAuthorAgent
-  cwd: string
-}): Promise<{
-  cleanup: () => Promise<void>
-  env: NodeJS.ProcessEnv
-  tempWorkspaceRoot: string
-}> => {
-  const sessionRoot = await mkdtemp(join(tmpdir(), 'bugscrub-author-'))
-  const tempWorkspaceRoot = join(sessionRoot, 'workspace')
-  const tempBinRoot = join(sessionRoot, 'bin')
-  const tempCliRoot = join(sessionRoot, 'bugscrub-cli')
-  const wrapperPath = join(tempBinRoot, 'bugscrub')
-  const packagedCliWrapperPath = join(tempCliRoot, 'dist', 'bugscrub')
-  const sourceCliEntryPath = join(tempCliRoot, 'src', 'index.ts')
-  const hasPackagedCli = await fileExists({
-    path: join(BUGSCRUB_PROJECT_ROOT, 'dist', 'bugscrub')
-  })
-
-  await mkdir(tempCliRoot, {
-    recursive: true
-  })
-  await cp(cwd, tempWorkspaceRoot, {
-    filter: copyFilter,
-    recursive: true
-  })
-  await symlink(join(BUGSCRUB_PROJECT_ROOT, 'node_modules'), join(tempCliRoot, 'node_modules'))
-
-  if (hasPackagedCli) {
-    await Promise.all([
-      cp(join(BUGSCRUB_PROJECT_ROOT, 'dist'), join(tempCliRoot, 'dist'), {
-        recursive: true
-      }),
-      cp(join(BUGSCRUB_PROJECT_ROOT, 'package.json'), join(tempCliRoot, 'package.json'))
-    ])
-  } else {
-    await Promise.all([
-      cp(join(BUGSCRUB_PROJECT_ROOT, 'src'), join(tempCliRoot, 'src'), {
-        recursive: true
-      }),
-      writeTextFile({
-        path: join(tempCliRoot, 'package.json'),
-        contents: JSON.stringify(
-          {
-            name: 'bugscrub-authoring-cli',
-            private: true,
-            type: 'module'
-          },
-          null,
-          2
-        )
-      })
-    ])
-  }
-
-  await writeTextFile({
-    path: wrapperPath,
-    contents: hasPackagedCli
-      ? ['#!/bin/sh', `exec "${packagedCliWrapperPath}" "$@"`].join('\n')
-      : [
-          '#!/bin/sh',
-          `exec node --import "${join(tempCliRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs')}" "${sourceCliEntryPath}" "$@"`
-        ].join('\n')
-  })
-  await chmod(wrapperPath, 0o755)
-  await pinAuthoringAgentPreference({
-    agent,
-    tempWorkspaceRoot
-  })
-
-  return {
-    cleanup: async () => {
-      await rm(sessionRoot, {
-        force: true,
-        recursive: true
-      })
-    },
-    env: createAuthoringEnv({
-      pathPrefix: tempBinRoot
-    }),
-    tempWorkspaceRoot
-  }
-}
-
-const listScopedAuthoringFiles = async ({
-  includeExcludedSourceFiles = false,
-  root
-}: {
-  includeExcludedSourceFiles?: boolean
-  root: string
-}): Promise<string[]> => {
-  const visit = async ({
-    currentPath
-  }: {
-    currentPath: string
-  }): Promise<string[]> => {
-    const entries = await readdir(currentPath, {
-      withFileTypes: true
-    })
-    const files: string[] = []
-
-    for (const entry of entries) {
-      const entryPath = join(currentPath, entry.name)
-      const relativePath = relative(root, entryPath).split('\\').join('/')
-
-      if (relativePath === '.bugscrub' || relativePath.startsWith('.bugscrub/')) {
-        continue
-      }
-
-      if (!includeExcludedSourceFiles && !shouldCopyAuthoringPath({ source: entryPath })) {
-        continue
-      }
-
-      if (entry.isDirectory()) {
-        files.push(
-          ...(await visit({
-            currentPath: entryPath
-          }))
-        )
-        continue
-      }
-
-      if (entry.isFile()) {
-        files.push(relativePath)
-      }
-    }
-
-    return files
-  }
-
-  return visit({
-    currentPath: root
-  })
-}
-
-const assertScopedAuthoringChanges = async ({
-  cwd,
-  tempWorkspaceRoot
-}: {
-  cwd: string
-  tempWorkspaceRoot: string
-}): Promise<void> => {
-  const [sourceFiles, authoredFiles] = await Promise.all([
-    listScopedAuthoringFiles({
-      root: cwd
-    }),
-    listScopedAuthoringFiles({
-      includeExcludedSourceFiles: true,
-      root: tempWorkspaceRoot
-    })
-  ])
-  const sourceSet = new Set(sourceFiles)
-  const authoredSet = new Set(authoredFiles)
-  const candidatePaths = [...new Set([...sourceFiles, ...authoredFiles])].sort((left, right) =>
-    left.localeCompare(right)
-  )
-  const unexpectedChanges: string[] = []
-
-  for (const candidatePath of candidatePaths) {
-    if (!sourceSet.has(candidatePath) || !authoredSet.has(candidatePath)) {
-      unexpectedChanges.push(candidatePath)
-      continue
-    }
-
-    const [sourceContents, authoredContents] = await Promise.all([
-      readFile(join(cwd, candidatePath), 'utf8'),
-      readFile(join(tempWorkspaceRoot, candidatePath), 'utf8')
-    ])
-
-    if (sourceContents !== authoredContents) {
-      unexpectedChanges.push(candidatePath)
-    }
-  }
-
-  if (unexpectedChanges.length > 0) {
-    throw new CliError({
-      message: [
-        'Authoring agents may inspect the repo, but BugScrub only accepts changes under `.bugscrub/`.',
-        'Unexpected edits were detected outside `.bugscrub/`:',
-        ...unexpectedChanges.map((path) => `- ${path}`)
-      ].join('\n'),
-      exitCode: 1
-    })
-  }
-}
-
 export const syncAuthoredWorkspace = async ({
   cwd,
   tempWorkspaceRoot
 }: {
   cwd: string
   tempWorkspaceRoot: string
-}): Promise<void> => {
-  await assertScopedAuthoringChanges({
+}): Promise<string[]> => {
+  return syncBugscrubWorkspace({
     cwd,
     tempWorkspaceRoot
-  })
-
-  const realBugscrubRoot = join(cwd, '.bugscrub')
-  const tempBugscrubRoot = join(tempWorkspaceRoot, '.bugscrub')
-  const syncRoot = await mkdtemp(join(cwd, '.bugscrub-sync-'))
-  const stagedBugscrubRoot = join(syncRoot, '.bugscrub')
-  const backupBugscrubRoot = join(syncRoot, '.bugscrub-backup')
-
-  await cp(tempBugscrubRoot, stagedBugscrubRoot, {
-    recursive: true
-  })
-
-  let movedExistingWorkspace = false
-
-  try {
-    await rename(realBugscrubRoot, backupBugscrubRoot)
-    movedExistingWorkspace = true
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      await rm(syncRoot, {
-        force: true,
-        recursive: true
-      })
-      throw error
-    }
-  }
-
-  try {
-    await rename(stagedBugscrubRoot, realBugscrubRoot)
-  } catch (error) {
-    if (movedExistingWorkspace) {
-      await rename(backupBugscrubRoot, realBugscrubRoot)
-    }
-
-    await rm(syncRoot, {
-      force: true,
-      recursive: true
-    })
-    throw error
-  }
-
-  await rm(syncRoot, {
-    force: true,
-    recursive: true
   })
 }
 
@@ -659,105 +406,44 @@ const validateAuthoredWorkspace = async ({
   }
 }
 
-const runCodexAuthoringAttempt = async ({
-  env,
+const runAuthoringAttempt = async ({
+  agent,
   prompt,
+  sessionRoot,
   tempWorkspaceRoot,
   timeoutSeconds
 }: {
-  env: NodeJS.ProcessEnv
+  agent: InitAuthorAgent
   prompt: string
+  sessionRoot: string
   tempWorkspaceRoot: string
   timeoutSeconds: number
 }): Promise<InitAuthorResult> => {
   const renderer = createTranscriptRenderer()
-  const result = await runCommand({
-    args: [
-      'exec',
-      '--model',
-      DEFAULT_AUTHORING_CODEX_MODEL,
-      '--sandbox',
-      'workspace-write',
-      '--skip-git-repo-check',
-      prompt
-    ],
-    command: 'codex',
+  const result = await runAgentInContainer({
+    agent,
     cwd: tempWorkspaceRoot,
-    env,
     onStderr: (chunk) => {
       renderer.pushStderr(chunk)
     },
     onStdout: (chunk) => {
       renderer.pushStdout(chunk)
     },
+    prompt,
+    sessionRoot,
     timeoutMs: timeoutSeconds * 1_000
   })
   renderer.flush()
 
   if (result.exitCode !== 0) {
     throw new CliError({
-      message: `Codex authoring failed with exit code ${result.exitCode}.\n${result.stderr.trim()}`,
+      message: `${agent === 'codex' ? 'Codex' : 'Claude'} authoring failed with exit code ${result.exitCode}.\n${result.stderr.trim()}`,
       exitCode: 1
     })
   }
 
   return {
-    agent: 'codex',
-    stderr: result.stderr,
-    stdout: result.stdout,
-    logPath: ''
-  }
-}
-
-const runClaudeAuthoringAttempt = async ({
-  env,
-  maxBudgetUsd,
-  prompt,
-  tempWorkspaceRoot,
-  timeoutSeconds
-}: {
-  env: NodeJS.ProcessEnv
-  maxBudgetUsd: number
-  prompt: string
-  tempWorkspaceRoot: string
-  timeoutSeconds: number
-}): Promise<InitAuthorResult> => {
-  const renderer = createTranscriptRenderer()
-  const result = await runCommand({
-    args: [
-      '--print',
-      '--output-format',
-      'text',
-      '--model',
-      DEFAULT_AUTHORING_CLAUDE_MODEL,
-      '--permission-mode',
-      'acceptEdits',
-      '--max-budget-usd',
-      String(maxBudgetUsd),
-      prompt
-    ],
-    command: 'claude',
-    cwd: tempWorkspaceRoot,
-    env,
-    onStderr: (chunk) => {
-      renderer.pushStderr(chunk)
-    },
-    onStdout: (chunk) => {
-      renderer.pushStdout(chunk)
-    },
-    timeoutMs: timeoutSeconds * 1_000
-  })
-  renderer.flush()
-
-  if (result.exitCode !== 0) {
-    throw new CliError({
-      message: `Claude authoring failed with exit code ${result.exitCode}.\n${result.stderr.trim()}`,
-      exitCode: 1
-    })
-  }
-
-  return {
-    agent: 'claude',
+    agent,
     stderr: result.stderr,
     stdout: result.stdout,
     logPath: ''
@@ -789,9 +475,12 @@ export const authorWorkspace = async ({
     `Running ${agent} in an isolated copy of the current directory. Full transcript will be written under .bugscrub/.`
   )
 
-  const isolatedWorkspace = await createIsolatedWorkspace({
+  await ensureDockerRuntime()
+  const isolatedWorkspace = await createDisposableWorkspace({
     agent,
-    cwd
+    cwd,
+    includeNodeModules: false,
+    includePackagedBugscrubCli: true
   })
   const aggregatedStdout: string[] = []
   const aggregatedStderr: string[] = []
@@ -803,21 +492,13 @@ export const authorWorkspace = async ({
         `Authoring attempt ${attempt}/${MAX_AUTHORING_VALIDATION_ATTEMPTS} in the isolated workspace.`
       )
 
-      const attemptResult =
-        agent === 'codex'
-          ? await runCodexAuthoringAttempt({
-              env: isolatedWorkspace.env,
-              prompt: currentPrompt,
-              tempWorkspaceRoot: isolatedWorkspace.tempWorkspaceRoot,
-              timeoutSeconds: config.agent.timeout
-            })
-          : await runClaudeAuthoringAttempt({
-              env: isolatedWorkspace.env,
-              maxBudgetUsd: config.agent.maxBudgetUsd,
-              prompt: currentPrompt,
-              tempWorkspaceRoot: isolatedWorkspace.tempWorkspaceRoot,
-              timeoutSeconds: config.agent.timeout
-            })
+      const attemptResult = await runAuthoringAttempt({
+        agent,
+        prompt: currentPrompt,
+        sessionRoot: isolatedWorkspace.sessionRoot,
+        tempWorkspaceRoot: isolatedWorkspace.tempWorkspaceRoot,
+        timeoutSeconds: config.agent.timeout
+      })
 
       aggregatedStdout.push(
         `## Authoring attempt ${attempt}\n${attemptResult.stdout.trim() || '(empty)'}`
@@ -827,7 +508,7 @@ export const authorWorkspace = async ({
       )
 
       const validationResult = await validateAuthoredWorkspace({
-        env: isolatedWorkspace.env,
+        env: isolatedWorkspace.hostEnv,
         tempWorkspaceRoot: isolatedWorkspace.tempWorkspaceRoot,
         timeoutSeconds: config.agent.timeout
       })
@@ -840,7 +521,7 @@ export const authorWorkspace = async ({
       )
 
       if (validationResult.exitCode === 0) {
-        await syncAuthoredWorkspace({
+        const authoredFiles = await syncAuthoredWorkspace({
           cwd,
           tempWorkspaceRoot: isolatedWorkspace.tempWorkspaceRoot
         })
@@ -848,13 +529,14 @@ export const authorWorkspace = async ({
         const logPath = await writeAuthoringLog({
           agent,
           cwd,
-          env: isolatedWorkspace.env,
+          env: isolatedWorkspace.hostEnv,
           stderr: aggregatedStderr.join('\n\n'),
           stdout: aggregatedStdout.join('\n\n')
         })
 
         return {
           agent,
+          authoredFiles,
           logPath,
           stderr: aggregatedStderr.join('\n\n'),
           stdout: aggregatedStdout.join('\n\n')

@@ -1,20 +1,26 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('../../../src/runner/agent/process.js', () => ({
-  isCommandAvailable: vi.fn(),
-  runCommand: vi.fn()
+vi.mock('../../../src/agent-runtime/container.js', () => ({
+  detectAvailableContainerAgents: vi.fn(),
+  readCodexLastMessage: vi.fn(),
+  runAgentInContainer: vi.fn()
 }))
 
 import { CodexAdapter } from '../../../src/runner/agent/codex.js'
-import { runCommand } from '../../../src/runner/agent/process.js'
+import {
+  readCodexLastMessage,
+  runAgentInContainer
+} from '../../../src/agent-runtime/container.js'
 import { CliError } from '../../../src/utils/errors.js'
+import { logger } from '../../../src/utils/logger.js'
 import type { RunContext } from '../../../src/runner/agent/types.js'
 
-const mockRunCommand = vi.mocked(runCommand)
+const mockReadCodexLastMessage = vi.mocked(readCodexLastMessage)
+const mockRunAgentInContainer = vi.mocked(runAgentInContainer)
 const tempDirectories: string[] = []
 
 const createRunContext = ({
@@ -76,6 +82,7 @@ const createRunContext = ({
       }
     },
     cwd: root,
+    containerSessionRoot: join(root, 'session'),
     environment: {
       baseUrl: 'http://localhost:3000',
       defaultIdentity: {
@@ -141,7 +148,8 @@ const createRunContext = ({
 describe('CodexAdapter', () => {
   afterEach(async () => {
     vi.restoreAllMocks()
-    mockRunCommand.mockReset()
+    mockReadCodexLastMessage.mockReset()
+    mockRunAgentInContainer.mockReset()
     await Promise.all(
       tempDirectories.splice(0).map((directory) =>
         rm(directory, { recursive: true, force: true })
@@ -155,33 +163,40 @@ describe('CodexAdapter', () => {
     await mkdir(join(root, 'debug'), { recursive: true })
     await writeFile(join(root, 'schema.json'), '{}\n', 'utf8')
 
-    mockRunCommand.mockImplementation(async ({ args }) => {
-      const outputIndex = args.indexOf('--output-last-message')
-      const outputPath = args[outputIndex + 1]!
-
-      await writeFile(
-        outputPath,
-        JSON.stringify({
-          status: 'passed',
-          startedAt: '2026-03-10T17:00:00.000Z',
-          completedAt: '2026-03-10T17:00:02.000Z',
-          durationMs: 2000,
-          findings: [],
-          assertionResults: [],
-          evidence: {
-            screenshots: [],
-            networkLogs: []
-          }
-        }),
-        'utf8'
-      )
+    mockRunAgentInContainer.mockImplementation(async ({ onStdout }) => {
+      onStdout?.([
+        '{"type":"thread.started","thread_id":"thread-123"}',
+        '{"type":"turn.started"}',
+        '{"type":"turn.completed"}'
+      ].join('\n'))
 
       return {
         exitCode: 0,
         stderr: '',
-        stdout: '{"event":"completed"}\n'
+        stdout: [
+          '{"type":"thread.started","thread_id":"thread-123"}',
+          '{"type":"turn.started"}',
+          '{"type":"turn.completed"}'
+        ].join('\n')
       }
     })
+    mockReadCodexLastMessage.mockResolvedValue(
+      JSON.stringify({
+        status: 'passed',
+        startedAt: '2026-03-10T17:00:00.000Z',
+        completedAt: '2026-03-10T17:00:02.000Z',
+        durationMs: 2000,
+        findings: [],
+        assertionResults: [],
+        evidence: {
+          screenshots: [],
+          networkLogs: []
+        }
+      })
+    )
+
+    const loggerInfoSpy = vi.spyOn(logger, 'info')
+    const loggerSuccessSpy = vi.spyOn(logger, 'success')
 
     const adapter = new CodexAdapter()
     const result = await adapter.run(
@@ -190,26 +205,21 @@ describe('CodexAdapter', () => {
       })
     )
 
-    expect(mockRunCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        args: expect.arrayContaining([
-          'exec',
-          '--model',
-          'gpt-5.3-codex',
-          '--json',
-          '--sandbox',
-          'read-only'
-        ]),
-        onStdout: expect.any(Function),
-        env: expect.not.objectContaining({
-          NODE_INSPECT_RESUME_ON_START: expect.anything(),
-          NODE_OPTIONS: expect.anything(),
-          VSCODE_INSPECTOR_OPTIONS: expect.anything()
-        })
-      })
+    expect(mockRunAgentInContainer).toHaveBeenCalledWith({
+      agent: 'codex',
+      cwd: root,
+      onStdout: expect.any(Function),
+      prompt: 'prompt',
+      schemaPath: join(root, 'schema.json'),
+      sessionRoot: join(root, 'session'),
+      timeoutMs: 30_000
+    })
+    expect(loggerInfoSpy).toHaveBeenCalledWith('Codex run started (thread thread-123).')
+    expect(loggerInfoSpy).toHaveBeenCalledWith('Codex is executing the workflow.')
+    expect(loggerSuccessSpy).toHaveBeenCalledWith(
+      'Codex finished execution and is returning the final result.'
     )
     expect(result.result.status).toBe('passed')
-    await expect(readFile(join(root, 'agent-transcript.jsonl'), 'utf8')).rejects.toBeDefined()
   })
 
   it('surfaces codex stdout and stderr and preserves the last-message artifact path on failure', async () => {
@@ -218,7 +228,7 @@ describe('CodexAdapter', () => {
     await mkdir(join(root, 'debug'), { recursive: true })
     await writeFile(join(root, 'schema.json'), '{}\n', 'utf8')
 
-    mockRunCommand.mockResolvedValue({
+    mockRunAgentInContainer.mockResolvedValue({
       exitCode: 1,
       stderr: 'fatal: codex backend error\n',
       stdout: '{"event":"failed"}\n'

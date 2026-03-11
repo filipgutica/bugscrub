@@ -77,6 +77,7 @@ export type BaseRunContext = {
     name: AgentName
   }
   artifacts: RunArtifactPaths
+  containerSessionRoot?: string
   config: BugScrubConfig
   cwd: string
   environment: {

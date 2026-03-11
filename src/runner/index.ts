@@ -1,5 +1,6 @@
 import { resolve } from 'node:path'
 
+import { createDisposableWorkspace, remapPath, syncBugscrubWorkspace } from '../agent-runtime/container.js'
 import { loadBugScrubConfig } from '../core/config.js'
 import { loadWorkspaceFiles } from '../core/loader.js'
 import { resolveWorkspaceDefinition, validateWorkspaceDefinition } from '../core/resolver.js'
@@ -14,7 +15,6 @@ import { validateAssertionCoverage } from './assertions.js'
 import { ClaudeAdapter } from './agent/claude.js'
 import { CodexAdapter } from './agent/codex.js'
 import { detectAndSelectAdapter } from './agent/detector.js'
-import { ensureChromeDevtoolsMcpConfigured } from './agent/mcp.js'
 import type {
   AgentAdapter,
   AgentName,
@@ -165,21 +165,24 @@ const resolveWorkflowSelection = ({
 const buildRunContext = ({
   adapter,
   capabilities,
+  containerSessionRoot,
   config,
   cwd,
   maxSteps,
+  runId,
   selectedWorkflow,
   surface
 }: {
   adapter: AgentAdapter
   capabilities: Awaited<ReturnType<AgentAdapter['getCapabilities']>>
+  containerSessionRoot?: string
   config: Awaited<ReturnType<typeof loadBugScrubConfig>>
   cwd: string
   maxSteps: number | undefined
+  runId: string
   selectedWorkflow: { path: string; workflow: WorkflowConfig }
   surface: ResolvedSurface
 }): RunContext => {
-  const runId = createRunId()
   const environment = config.envs[selectedWorkflow.workflow.target.env]
 
   if (!environment) {
@@ -218,6 +221,11 @@ const buildRunContext = ({
       name: adapter.name
     },
     artifacts,
+    ...(containerSessionRoot
+      ? {
+          containerSessionRoot
+        }
+      : {}),
     config,
     cwd,
     environment: {
@@ -361,14 +369,12 @@ export const executeRun = async ({
   adapters = createDefaultAdapters(),
   cwd,
   dryRun,
-  ensureBrowserRuntimeConfigured = ensureChromeDevtoolsMcpConfigured,
   maxSteps,
   workflow
 }: {
   adapters?: AgentAdapter[]
   cwd: string
   dryRun: boolean
-  ensureBrowserRuntimeConfigured?: typeof ensureChromeDevtoolsMcpConfigured
   maxSteps: number | undefined
   workflow: string | undefined
 }): Promise<{
@@ -428,12 +434,28 @@ export const executeRun = async ({
     requires: selectedWorkflow.workflow.requires
   })
 
+  const runId = createRunId()
+  const liveWorkspace =
+    dryRun
+      ? undefined
+      : await createDisposableWorkspace({
+          agent: selectedAdapter.selected.name,
+          cwd,
+          includeNodeModules: true,
+          includePackagedBugscrubCli: false
+        })
   const context = buildRunContext({
     adapter: selectedAdapter.selected,
     capabilities,
+    ...(liveWorkspace
+      ? {
+          containerSessionRoot: liveWorkspace.sessionRoot
+        }
+      : {}),
     config,
-    cwd,
+    cwd: liveWorkspace?.tempWorkspaceRoot ?? cwd,
     maxSteps,
+    runId,
     selectedWorkflow,
     surface
   })
@@ -447,74 +469,143 @@ export const executeRun = async ({
     }
   }
 
-  // Browser runtime setup is deferred until after dry-run so config validation
-  // stays cheap and does not require external runtime state.
-  await ensureBrowserRuntimeConfigured({
-    agent: selectedAdapter.selected.name
+  const hostArtifacts = buildRunArtifactPaths({
+    cwd,
+    runId,
+    workflowName: selectedWorkflow.workflow.name
   })
 
-  await prepareRunArtifactDirectories({
-    artifacts: context.artifacts
-  })
-
-  await Promise.all([
-    writePromptArtifact({
-      path: context.artifacts.promptPath,
-      prompt: context.prompt
-    }),
-    writeResponseSchemaArtifact({
-      path: context.artifacts.responseSchemaPath,
-      schema: JSON.stringify(codexRunResultJsonSchema, null, 2)
+  try {
+    await prepareRunArtifactDirectories({
+      artifacts: context.artifacts
     })
-  ])
 
-  const startedAt = nowIso()
-  const adapterOutput = await selectedAdapter.selected.run(context)
-  const result = {
-    ...adapterOutput.result,
-    startedAt: adapterOutput.result.startedAt || startedAt,
-    transcriptPath: context.artifacts.transcriptPath
-  }
-  const assertionValidation = validateAssertionCoverage({
-    assertions: context.hardAssertions,
-    results: result.assertionResults
-  })
+    await Promise.all([
+      writePromptArtifact({
+        path: context.artifacts.promptPath,
+        prompt: context.prompt
+      }),
+      writeResponseSchemaArtifact({
+        path: context.artifacts.responseSchemaPath,
+        schema: JSON.stringify(codexRunResultJsonSchema, null, 2)
+      })
+    ])
 
-  if (assertionValidation.issues.length > 0) {
-    throw new CliError({
-      message: [
-        'Agent returned an incomplete assertionResults payload.',
-        ...assertionValidation.issues.map((issue) => `- ${issue}`)
-      ].join('\n'),
-      exitCode: 1
+    const startedAt = nowIso()
+    const adapterOutput = await selectedAdapter.selected.run(context)
+    await writeTranscriptArtifact({
+      path: context.artifacts.transcriptPath,
+      transcript: adapterOutput.artifacts.stdout
     })
-  }
 
-  await writeTranscriptArtifact({
-    path: context.artifacts.transcriptPath,
-    transcript: adapterOutput.artifacts.stdout
-  })
-
-  await writeRunReports({
-    agent: selectedAdapter.selected.name,
-    paths: {
-      reportJsonPath: context.artifacts.reportJsonPath,
-      reportMarkdownPath: context.artifacts.reportMarkdownPath
-    },
-    result,
-    runId: context.runId,
-    workflow: {
-      env: context.environment.name,
-      name: context.workflow.name,
-      path: context.workflowPath,
-      surface: context.selectedSurface.surface.name
+    const result = {
+      ...adapterOutput.result,
+      startedAt: adapterOutput.result.startedAt || startedAt,
+      transcriptPath: remapPath({
+        fromRoot: context.cwd,
+        path: context.artifacts.transcriptPath,
+        toRoot: cwd
+      })
     }
-  })
-
-  return {
-    reportPaths: {
-      json: context.artifacts.reportJsonPath,
-      markdown: context.artifacts.reportMarkdownPath
+    const remapResultPath = (path: string | undefined) =>
+      path === undefined
+        ? undefined
+        : remapPath({
+            fromRoot: context.cwd,
+            path,
+            toRoot: cwd
+          })
+    const hostResult = {
+      ...result,
+      assertionResults: result.assertionResults.map((assertionResult) => ({
+        ...assertionResult,
+        ...(assertionResult.evidence
+          ? {
+              evidence: {
+                networkLog: remapResultPath(assertionResult.evidence.networkLog),
+                screenshot: remapResultPath(assertionResult.evidence.screenshot)
+              }
+            }
+          : {})
+      })),
+      evidence: {
+        networkLogs: result.evidence.networkLogs.map((path) =>
+          remapPath({
+            fromRoot: context.cwd,
+            path,
+            toRoot: cwd
+          })
+        ),
+        screenshots: result.evidence.screenshots.map((path) =>
+          remapPath({
+            fromRoot: context.cwd,
+            path,
+            toRoot: cwd
+          })
+        )
+      },
+      findings: result.findings.map((finding) => ({
+        ...finding,
+        ...(finding.evidence
+          ? {
+              evidence: {
+                networkLog: remapResultPath(finding.evidence.networkLog),
+                screenshot: remapResultPath(finding.evidence.screenshot)
+              }
+            }
+          : {})
+      }))
     }
+    const assertionValidation = validateAssertionCoverage({
+      assertions: context.hardAssertions,
+      results: hostResult.assertionResults
+    })
+
+    if (assertionValidation.issues.length > 0) {
+      throw new CliError({
+        message: [
+          'Agent returned an incomplete assertionResults payload.',
+          ...assertionValidation.issues.map((issue) => `- ${issue}`)
+        ].join('\n'),
+        exitCode: 1
+      })
+    }
+
+    await syncBugscrubWorkspace({
+      cwd,
+      tempWorkspaceRoot: context.cwd
+    })
+
+    await writeRunReports({
+      agent: selectedAdapter.selected.name,
+      paths: {
+        reportJsonPath: hostArtifacts.reportJsonPath,
+        reportMarkdownPath: hostArtifacts.reportMarkdownPath
+      },
+      result: hostResult,
+      runId: context.runId,
+      workflow: {
+        env: context.environment.name,
+        name: context.workflow.name,
+        path: context.workflowPath,
+        surface: context.selectedSurface.surface.name
+      }
+    })
+
+    return {
+      reportPaths: {
+        json: hostArtifacts.reportJsonPath,
+        markdown: hostArtifacts.reportMarkdownPath
+      }
+    }
+  } catch (error) {
+    await syncBugscrubWorkspace({
+      cwd,
+      tempWorkspaceRoot: context.cwd
+    })
+
+    throw error
+  } finally {
+    await liveWorkspace?.cleanup()
   }
 }

@@ -119,7 +119,12 @@ export const runInitCommand = async ({
       dryRun,
       selectedPackage,
       usesPlaceholderBaseUrl,
-      writtenFiles: result.writtenFiles
+      writtenFiles: result.writtenFiles,
+      ...(authorResult?.authoredFiles
+        ? {
+            authoredFiles: authorResult.authoredFiles
+          }
+        : {})
     })}\n`
   )
 }

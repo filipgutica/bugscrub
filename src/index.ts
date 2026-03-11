@@ -9,6 +9,7 @@ import { registerInitCommand } from './commands/init.js'
 import { registerRunCommand } from './commands/run.js'
 import { registerSchemaCommand } from './commands/schema.js'
 import { registerSetupCommand } from './commands/setup.js'
+import { registerSetupRuntimeCommand } from './commands/setup-runtime.js'
 import { registerValidateCommand } from './commands/validate.js'
 import { CliError } from './utils/errors.js'
 import { logger } from './utils/logger.js'
@@ -31,6 +32,7 @@ export const buildCli = (): Command => {
 
   registerInitCommand(program)
   registerSetupCommand(program)
+  registerSetupRuntimeCommand(program)
   registerDiscoverCommand(program)
   registerValidateCommand(program)
   registerGenerateCommand(program)

@@ -37,7 +37,9 @@ describe('runSetupCommand', () => {
     expect(contents).toContain(setupCommandInternals.LOCAL_DEV_BLOCK_START)
     expect(contents).toContain('bugscrub() {')
     expect(contents).toContain(
-      `"${setupCommandInternals.resolveLocalCliEntryPath()}" "$@"`
+      `"${setupCommandInternals.resolveLocalCliEntryPath({
+        packageRoot: '/Users/filip.gutica@konghq.com/code/bugscrub'
+      })}" "$@"`
     )
   })
 
@@ -77,7 +79,7 @@ describe('runSetupCommand', () => {
 
     await expect(
       runSetupCommand({
-        projectRoot: tempRoot,
+        packageRoot: tempRoot,
         shellRcFile: join(tempRoot, '.zshrc')
       })
     ).rejects.toBeInstanceOf(CliError)

@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('../../../src/runner/agent/process.js', () => ({
-  isCommandAvailable: vi.fn(),
-  runCommand: vi.fn()
+vi.mock('../../../src/agent-runtime/container.js', () => ({
+  detectAvailableContainerAgents: vi.fn(),
+  runAgentInContainer: vi.fn()
 }))
 
 import { ClaudeAdapter } from '../../../src/runner/agent/claude.js'
-import { runCommand } from '../../../src/runner/agent/process.js'
+import { runAgentInContainer } from '../../../src/agent-runtime/container.js'
 import type { RunContext } from '../../../src/runner/agent/types.js'
 
-const mockRunCommand = vi.mocked(runCommand)
+const mockRunAgentInContainer = vi.mocked(runAgentInContainer)
 
 const createRunContext = (): RunContext => {
   return {
@@ -66,6 +66,7 @@ const createRunContext = (): RunContext => {
       }
     },
     cwd: '/tmp',
+    containerSessionRoot: '/tmp/session',
     environment: {
       baseUrl: 'http://localhost:3000',
       defaultIdentity: {
@@ -131,11 +132,11 @@ const createRunContext = (): RunContext => {
 describe('ClaudeAdapter', () => {
   afterEach(() => {
     vi.restoreAllMocks()
-    mockRunCommand.mockReset()
+    mockRunAgentInContainer.mockReset()
   })
 
   it('runs without the dangerous-permissions bypass flag', async () => {
-    mockRunCommand.mockResolvedValue({
+    mockRunAgentInContainer.mockResolvedValue({
       exitCode: 0,
       stderr: '',
       stdout: JSON.stringify({
@@ -155,19 +156,14 @@ describe('ClaudeAdapter', () => {
     const adapter = new ClaudeAdapter()
     const result = await adapter.run(createRunContext())
 
-    expect(mockRunCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        args: expect.arrayContaining([
-          '--model',
-          'sonnet',
-          '--permission-mode',
-          'acceptEdits',
-          '--disallowedTools',
-          'Edit,MultiEdit,NotebookEdit,Write'
-        ])
-      })
-    )
-    expect(mockRunCommand.mock.calls[0]?.[0].args).not.toContain('--dangerously-skip-permissions')
+    expect(mockRunAgentInContainer).toHaveBeenCalledWith({
+      agent: 'claude',
+      cwd: '/tmp',
+      prompt: 'prompt',
+      schemaPath: '/tmp/schema.json',
+      sessionRoot: '/tmp/session',
+      timeoutMs: 30_000
+    })
     expect(result.result.status).toBe('passed')
   })
 })

@@ -102,6 +102,7 @@ export const renderInitReport = ({
 export const renderInitStdoutSummary = ({
   author,
   authorAgent,
+  authoredFiles = [],
   dryRun,
   selectedPackage,
   usesPlaceholderBaseUrl,
@@ -109,18 +110,20 @@ export const renderInitStdoutSummary = ({
 }: {
   author: boolean
   authorAgent: string | undefined
+  authoredFiles?: string[]
   dryRun: boolean
   selectedPackage: WorkspacePackage | undefined
   usesPlaceholderBaseUrl: boolean
   writtenFiles: string[]
 }): string => {
   const targetLabel = selectedPackage?.relativePath ?? '.'
+  const totalWrittenFiles = new Set([...writtenFiles, ...authoredFiles]).size
   const lines = [
     `BugScrub init ${dryRun ? 'previewed' : 'completed'} for ${targetLabel === '.' ? 'the current package' : targetLabel}.`,
     author
       ? `Scaffold: config, report, and agent handoff${dryRun ? ' planned for execution' : ` executed via ${authorAgent ?? 'the selected agent'}`}.`
       : 'Scaffold: config, report, and agent handoff only.',
-    `Files ${dryRun ? 'planned' : 'written'}: ${writtenFiles.length}.`
+    `Files ${dryRun ? 'planned' : 'written'}: ${totalWrittenFiles}.`
   ]
 
   if (usesPlaceholderBaseUrl) {

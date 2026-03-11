@@ -1,7 +1,61 @@
 {
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "$ref": "#/definitions/surfaceSchema",
   "definitions": {
-    "surfaceSchema": {}
-  },
-  "$schema": "http://json-schema.org/draft-07/schema#"
+    "surfaceSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^\\/"
+          }
+        },
+        "elements": {
+          "default": {},
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "test_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "test_id"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "routes",
+        "elements",
+        "capabilities"
+      ],
+      "additionalProperties": false
+    }
+  }
 }

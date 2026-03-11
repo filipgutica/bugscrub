@@ -1,10 +1,11 @@
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { executeRun } from '../../../src/runner/index.js'
+import { CliError } from '../../../src/utils/errors.js'
 import type { AgentAdapter, AgentCapabilities, RunContext } from '../../../src/runner/agent/types.js'
 
 const fixturesDir = fileURLToPath(new URL('../../fixtures/repos/', import.meta.url))
@@ -70,6 +71,21 @@ class UndetectedAdapter extends FakeAdapter {
   }
 }
 
+class FailingAdapter extends FakeAdapter {
+  public override async run(context: RunContext) {
+    await writeFile(
+      join(context.artifacts.debugDir, 'adapter-error.txt'),
+      'container-side failure details\n',
+      'utf8'
+    )
+
+    throw new CliError({
+      message: 'agent exploded',
+      exitCode: 1
+    })
+  }
+}
+
 const createTempRepo = async ({
   fixtureName
 }: {
@@ -100,7 +116,6 @@ describe('executeRun', () => {
       adapters: [new FakeAdapter()],
       cwd: repoPath,
       dryRun: true,
-      ensureBrowserRuntimeConfigured: async () => {},
       maxSteps: 7,
       workflow: 'api-requests-exploration'
     })
@@ -120,7 +135,6 @@ describe('executeRun', () => {
       adapters: [new UndetectedAdapter()],
       cwd: repoPath,
       dryRun: true,
-      ensureBrowserRuntimeConfigured: async () => {},
       maxSteps: 7,
       workflow: 'api-requests-exploration'
     })
@@ -139,7 +153,6 @@ describe('executeRun', () => {
       adapters: [adapter],
       cwd: repoPath,
       dryRun: false,
-      ensureBrowserRuntimeConfigured: async () => {},
       maxSteps: undefined,
       workflow: 'api-requests-exploration'
     })
@@ -163,6 +176,33 @@ describe('executeRun', () => {
     expect(await readFile(promptFile, 'utf8')).toContain('Verify that `https://staging.example.com` is reachable')
     expect(await readFile(promptFile, 'utf8')).toBe(adapter.lastPrompt)
     expect(await readFile(transcriptFile, 'utf8')).toContain('completed')
+  })
+
+  it('syncs .bugscrub debug artifacts back to the host when a live run fails', async () => {
+    const repoPath = await createTempRepo({
+      fixtureName: 'workspace-valid'
+    })
+
+    await expect(
+      executeRun({
+        adapters: [new FailingAdapter()],
+        cwd: repoPath,
+        dryRun: false,
+        maxSteps: undefined,
+        workflow: 'api-requests-exploration'
+      })
+    ).rejects.toMatchObject({
+      exitCode: 1,
+      message: 'agent exploded'
+    })
+
+    const debugRoot = join(repoPath, '.bugscrub', 'debug')
+    const debugRunDirectories = await readdir(debugRoot)
+
+    expect(debugRunDirectories).toHaveLength(1)
+    expect(
+      await readFile(join(debugRoot, debugRunDirectories[0]!, 'adapter-error.txt'), 'utf8')
+    ).toBe('container-side failure details\n')
   })
 
   it('tells the agent to return an empty assertionResults array when the workflow has no hard assertions', async () => {
@@ -201,7 +241,6 @@ describe('executeRun', () => {
       adapters: [adapter],
       cwd: repoPath,
       dryRun: false,
-      ensureBrowserRuntimeConfigured: async () => {},
       maxSteps: undefined,
       workflow: 'api-requests-exploration'
     })

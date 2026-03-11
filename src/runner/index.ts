@@ -17,6 +17,7 @@ import { ensureChromeDevtoolsMcpConfigured } from './agent/mcp.js'
 import type {
   AgentAdapter,
   AgentName,
+  BaseRunContext,
   ResolvedAssertion,
   ResolvedCapability,
   ResolvedIdentity,
@@ -31,7 +32,7 @@ import {
   writeTranscriptArtifact
 } from './diagnostics.js'
 import { negotiateCapabilities } from './negotiator.js'
-import { buildClaudePrompt, buildCodexPrompt } from './prompt/builder.js'
+import { buildPromptForContext } from './prompt/builder.js'
 import type { ResolvedSurface } from '../core/resolver.js'
 
 const resolveIdentity = ({
@@ -205,7 +206,7 @@ const buildRunContext = ({
       identityName: identityName ?? environment.defaultIdentity
     })
 
-  return {
+  const context: BaseRunContext = {
     agent: {
       capabilities,
       name: adapter.name
@@ -282,6 +283,13 @@ const buildRunContext = ({
     workflow: selectedWorkflow.workflow,
     workflowPath: selectedWorkflow.path
   }
+
+  return {
+    ...context,
+    prompt: buildPromptForContext({
+      context
+    })
+  }
 }
 
 const renderDryRunOutput = ({
@@ -291,15 +299,6 @@ const renderDryRunOutput = ({
   availableAdapters: AgentAdapter[]
   context: RunContext
 }): string => {
-  const prompt =
-    context.agent.name === 'claude'
-      ? buildClaudePrompt({
-          context
-        })
-      : buildCodexPrompt({
-          context
-        })
-
   return [
     `BugScrub run dry-run for workflow \`${context.workflow.name}\``,
     `Selected adapter: ${context.agent.name}`,
@@ -310,7 +309,7 @@ const renderDryRunOutput = ({
     `Run ID: ${context.runId}`,
     '',
     'Prompt preview:',
-    prompt
+    context.prompt
   ].join('\n')
 }
 
@@ -450,19 +449,10 @@ export const executeRun = async ({
     artifacts: context.artifacts
   })
 
-  const prompt =
-    context.agent.name === 'claude'
-      ? buildClaudePrompt({
-          context
-        })
-      : buildCodexPrompt({
-          context
-        })
-
   await Promise.all([
     writePromptArtifact({
       path: context.artifacts.promptPath,
-      prompt
+      prompt: context.prompt
     }),
     writeResponseSchemaArtifact({
       path: context.artifacts.responseSchemaPath,

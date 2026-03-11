@@ -1,24 +1,41 @@
 import { CliError } from '../utils/errors.js'
 import type { AgentCapabilities } from './agent/types.js'
 
-const capabilityAliases: Record<string, string[]> = {
-  'browser.navigation': ['browser.navigation'],
-  'browser.domRead': ['browser.domRead', 'browser.dom.read'],
-  'browser.networkObserve': ['browser.networkObserve', 'browser.network.observe'],
-  'browser.screenshots': ['browser.screenshots', 'browser.screenshot'],
-  'api.httpRequests': ['api.httpRequests', 'api.http.requests'],
-  'auth.session': ['auth.session'],
-  'auth.token': ['auth.token']
-}
-
-const capabilityAccessors: Record<string, (capabilities: AgentCapabilities) => boolean> = {
-  'api.httpRequests': ({ api }) => api.httpRequests,
-  'auth.session': ({ auth }) => auth.session,
-  'auth.token': ({ auth }) => auth.token,
-  'browser.domRead': ({ browser }) => browser.domRead,
-  'browser.navigation': ({ browser }) => browser.navigation,
-  'browser.networkObserve': ({ browser }) => browser.networkObserve,
-  'browser.screenshots': ({ browser }) => browser.screenshots
+const capabilityDefinitions: Record<
+  string,
+  {
+    aliases: string[]
+    check: (capabilities: AgentCapabilities) => boolean
+  }
+> = {
+  'api.httpRequests': {
+    aliases: ['api.httpRequests', 'api.http.requests'],
+    check: ({ api }) => api.httpRequests
+  },
+  'auth.session': {
+    aliases: ['auth.session'],
+    check: ({ auth }) => auth.session
+  },
+  'auth.token': {
+    aliases: ['auth.token'],
+    check: ({ auth }) => auth.token
+  },
+  'browser.domRead': {
+    aliases: ['browser.domRead', 'browser.dom.read'],
+    check: ({ browser }) => browser.domRead
+  },
+  'browser.navigation': {
+    aliases: ['browser.navigation'],
+    check: ({ browser }) => browser.navigation
+  },
+  'browser.networkObserve': {
+    aliases: ['browser.networkObserve', 'browser.network.observe'],
+    check: ({ browser }) => browser.networkObserve
+  },
+  'browser.screenshots': {
+    aliases: ['browser.screenshots', 'browser.screenshot'],
+    check: ({ browser }) => browser.screenshots
+  }
 }
 
 const normalizeRequirement = ({
@@ -28,8 +45,8 @@ const normalizeRequirement = ({
 }): string | undefined => {
   const normalized = requirement.trim()
 
-  for (const [canonical, aliases] of Object.entries(capabilityAliases)) {
-    if (aliases.includes(normalized)) {
+  for (const [canonical, definition] of Object.entries(capabilityDefinitions)) {
+    if (definition.aliases.includes(normalized)) {
       return canonical
     }
   }
@@ -53,13 +70,13 @@ export const negotiateCapabilities = ({
       return true
     }
 
-    const accessor = capabilityAccessors[normalized]
+    const definition = capabilityDefinitions[normalized]
 
-    if (!accessor) {
+    if (!definition) {
       return true
     }
 
-    return !accessor(capabilities)
+    return !definition.check(capabilities)
   })
 
   if (missing.length > 0) {

@@ -3,7 +3,6 @@ import { readFile } from 'node:fs/promises'
 import { CliError } from '../../utils/errors.js'
 import { runCommand, isCommandAvailable } from './process.js'
 import type { AdapterRunOutput, AgentAdapter, AgentCapabilities, RunContext } from './types.js'
-import { buildCodexPrompt } from '../prompt/builder.js'
 import { parseRunResultOutput } from './result.js'
 
 const codexCapabilities: AgentCapabilities = {
@@ -36,9 +35,6 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   public async run(context: RunContext): Promise<AdapterRunOutput> {
-    const prompt = buildCodexPrompt({
-      context
-    })
     const command = await runCommand({
       command: 'codex',
       cwd: context.cwd,
@@ -52,7 +48,7 @@ export class CodexAdapter implements AgentAdapter {
         context.artifacts.responseSchemaPath,
         '--output-last-message',
         context.artifacts.transcriptPath,
-        prompt
+        context.prompt
       ]
     })
 

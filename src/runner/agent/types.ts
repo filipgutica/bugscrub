@@ -70,7 +70,7 @@ export type RunArtifactPaths = {
   transcriptPath: string
 }
 
-export type RunContext = {
+export type BaseRunContext = {
   agent: {
     capabilities: AgentCapabilities
     name: AgentName
@@ -94,6 +94,10 @@ export type RunContext = {
   timeoutSeconds: number
   workflow: WorkflowConfig
   workflowPath: string
+}
+
+export type RunContext = BaseRunContext & {
+  prompt: string
 }
 
 export type AdapterRunArtifacts = {

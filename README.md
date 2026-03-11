@@ -60,7 +60,7 @@ bugscrub schema
 - `init` bootstraps `.bugscrub/` in a new repo and immediately invokes an authoring agent.
 - `discover` rescans an already initialized repo and asks the agent to add missing surfaces or workflows.
 - `validate` checks config and workflow files against schemas.
-- `generate` drafts workflows from diffs, tests, routes, or existing workflows.
+- `generate` drafts workflows from interactive source selection, routes, or existing workflows.
 - `run` executes a workflow through a compatible agent adapter.
 - `schema` prints JSON Schemas for inspection and debugging.
 

@@ -13,6 +13,7 @@ const tempDirectories: string[] = []
 
 class FakeAdapter implements AgentAdapter {
   public readonly name = 'codex' as const
+  public lastPrompt: string | undefined
 
   public async detect(): Promise<boolean> {
     return true
@@ -37,6 +38,8 @@ class FakeAdapter implements AgentAdapter {
   }
 
   public async run(context: RunContext) {
+    this.lastPrompt = context.prompt
+
     return {
       artifacts: {
         raw: {
@@ -137,9 +140,10 @@ describe('executeRun', () => {
     const repoPath = await createTempRepo({
       fixtureName: 'workspace-valid'
     })
+    const adapter = new FakeAdapter()
 
     const result = await executeRun({
-      adapters: [new FakeAdapter()],
+      adapters: [adapter],
       cwd: repoPath,
       dryRun: false,
       ensureBrowserRuntimeConfigured: async () => {},
@@ -162,6 +166,7 @@ describe('executeRun', () => {
     const transcriptFile = join(debugRoot, (await readFile(result.reportPaths!.json, 'utf8')).match(/"runId": "([^"]+)"/)?.[1] ?? '', 'agent-transcript.jsonl')
 
     expect(await readFile(promptFile, 'utf8')).toContain('## Output format')
+    expect(await readFile(promptFile, 'utf8')).toBe(adapter.lastPrompt)
     expect(await readFile(transcriptFile, 'utf8')).toContain('completed')
   })
 })

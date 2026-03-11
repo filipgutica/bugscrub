@@ -86,7 +86,7 @@ src/
     init.ts                   # bugscrub init [--dry-run]
     discover.ts               # bugscrub discover [--dry-run]
     validate.ts               # bugscrub validate
-    generate.ts               # bugscrub generate --from-<source> [--force] [--dry-run]
+    generate.ts               # bugscrub generate [interactive source select] [--force] [--dry-run]
     run.ts                    # bugscrub run [--dry-run]
     schema.ts                 # bugscrub schema [type]
   schemas/
@@ -116,8 +116,8 @@ src/
     scaffolder.ts             # write .bugscrub/ bootstrap files and directories
     summary.ts                # render init summary to stdout + write init-report/agent-handoff
   generate/
-    diff.ts                   # --from-diff: parse git diff → touched routes/surfaces
-    tests.ts                  # --from-tests: scan test names/routes → capability seeds
+    diff.ts                   # current-local-changes / compare-to-branch: parse git diff → touched routes/surfaces
+    tests.ts                  # from-tests interactive mode: scan test names/routes → capability seeds
     route.ts                  # --from-route: resolve route → surface + draft workflow
     clone.ts                  # --from-workflow: clone + adapt existing workflow YAML
     writer.ts                 # render draft WorkflowConfig → YAML with TODO markers
@@ -488,29 +488,56 @@ For local development, the repo may also include a self-contained sandbox app un
 ### Usage
 
 ```bash
-bugscrub generate --from-diff                          # diff HEAD against main (default)
-bugscrub generate --from-diff --base staging           # diff HEAD against staging
-bugscrub generate --from-tests                         # existing Playwright/Cypress/Vitest tests
+bugscrub generate                                      # interactive source selection
 bugscrub generate --from-route /checkout               # one UI surface by route
 bugscrub generate --from-workflow .bugscrub/workflows/checkout.yaml  # clone + adapt
 ```
 
 **Rules (v0):**
-- Exactly one `--from-*` flag required
+- With no source flag, `generate` opens an interactive source picker in TTY mode
+- In non-interactive mode, an explicit source input is required (`--from-route` or `--from-workflow` in v0)
 - Output defaults to `.bugscrub/workflows/<inferred-name>.yaml`; override with `--output <filename>`
 - Never overwrites an existing file without `--force`
 - `--dry-run` prints the draft without writing
+- `--filter <workspace>` is a top-level/pre-command flag for package-scoped commands in monorepos; it is not specific to `generate`
 
-**v0 scope:** `--from-diff`, `--from-tests`, `--from-route`, `--from-workflow`. All other modes deferred to v1.
+**v0 scope:** interactive modes for current local changes, compare-to-branch, and tests; explicit `--from-route` and `--from-workflow`. All other modes deferred to v1.
+
+### Interactive source picker (TTY mode)
+
+When `bugscrub generate` is run without a source flag in an interactive terminal, show a menu similar to `init` agent selection:
+
+- From current local changes
+- Compare current branch to `main`
+- Compare current branch to another branch
+- From tests
+
+If the user chooses "Compare current branch to another branch", prompt for the branch name. Keep `main` as the explicit common-case option instead of hiding it behind a prompt.
 
 ### Source modes
 
 | Flag | Input | Output |
 |---|---|---|
-| `--from-diff` | `git diff HEAD..main` by default; override with `--base <branch>` | Draft workflows for changed surfaces; **killer mode for PR workflows** |
-| `--from-tests` | All detected runners (Playwright/Cypress/Vitest); routes deduplicated; runner list noted in YAML header | Exploratory workflow adjacent to existing coverage |
+| Interactive: current local changes | Local git diff from working tree + index against `HEAD` | Draft workflows for changed surfaces/routes; best default for day-to-day local work |
+| Interactive: compare to `main` | Branch comparison using the merge-base with `main` | Draft workflows for the common PR/review case |
+| Interactive: compare to branch | Branch comparison using the merge-base with a typed base branch | Draft workflows for branch/PR-sized changes when `main` is not the right base |
+| Interactive: from tests | Scan repo test files from supported runners (Playwright/Cypress/Vitest) and infer routes/surfaces from titles, URLs, navigations, and selectors | Exploratory workflow adjacent to existing coverage; reuse existing surfaces/capabilities when possible |
 | `--from-route <path>` | Route path string | Workflow centered on one UI surface |
-| `--from-workflow <path>` | Existing workflow YAML | Cloned + adapted draft (e.g. checkout → guest-checkout) |
+| `--from-workflow <path>` | Existing workflow YAML on disk | Cloned draft that keeps the source workflow structure as a starting point, then updates the name/header and inserts TODO markers anywhere repo-specific adaptation is still required |
+
+### Source mode semantics (clarified)
+
+- "From current local changes" is deterministic local analysis. BugScrub reads git state itself; it does **not** ask an agent to generate or interpret an arbitrary pasted diff in v0.
+- "From current local changes" should target the developer's current staged + unstaged changes because that is the least surprising default behavior in local CLI usage.
+- "Compare current branch to `main`" is the default branch/PR mode because that is the common case in most repos.
+- "Compare current branch to another branch" is the escape hatch when the intended base is something like `staging`, `release/*`, or another long-lived integration branch.
+- "From tests" should scan the repo's detected test files by default. If we later need narrower scope, add an explicit path filter flag rather than overloading the top-level mode choice itself.
+- "From tests" should re-run the same filesystem-based workspace/framework/test detection used by `init`; BugScrub does not persist detected test-runner metadata in `bugscrub.config.yaml`.
+- "From tests" should not try to convert an existing deterministic test into a 1:1 workflow. It should extract likely surface names, route hints, setup patterns, and assertion seeds, then produce an exploratory draft adjacent to that coverage.
+- `--from-route <path>` should first scan existing `.bugscrub/surfaces/*/surface.yaml` files for an exact `routes` match and reuse that surface when found.
+- If `--from-route <path>` does not match an existing surface, generate should create a draft workflow against an inferred stub surface name and mark any unresolved capabilities/assertions with explicit TODOs rather than failing silently.
+- `--from-workflow <path>` means "start from an existing workflow as a template." It is the variant/clone mode for cases like authenticated checkout → guest checkout, desktop flow → mobile flow, or admin flow → readonly flow.
+- `--from-workflow` should preserve useful structure from the source workflow, but it must never silently keep source-specific refs that no longer make sense. Unknown adaptations should become explicit TODO markers.
 
 ### Output behavior
 
@@ -518,11 +545,12 @@ Generate should:
 - Prefer **reusing existing surfaces and capabilities** over inventing new ones
 - Use `TODO_define_capability_for_<area>` markers when inference is weak — honest drafts beat silent gaps
 - Write a short rationale comment in the workflow YAML header
+- Slugify inferred workflow filenames with lowercase kebab-case: trim leading/trailing slashes, replace non-alphanumeric separators with `-`, collapse repeated `-`, and use `root` for `/`. Example: `/api/v1/users` → `api-v1-users.yaml`
 
 Example of an honest draft:
 
 ```yaml
-# Generated from: git diff main..HEAD
+# Generated from: git diff HEAD (working tree + index)
 # Surfaces touched: checkout, payments
 # Note: 'export_flow' capability not found — marked TODO
 
@@ -643,7 +671,7 @@ The Codex adapter may use a different prompt structure — that is its business.
 ## Init Scanning Strategy
 
 ### Detection (detector.ts — filesystem only, no execution)
-- pnpm workspace: `pnpm-workspace.yaml` exists → prompt for package selection
+- pnpm workspace: `pnpm-workspace.yaml` exists → prompt for package selection in TTY mode, or require an explicit `--filter <workspace>` in non-interactive/root-driven flows when multiple packages match
 - Framework: check for `next.config.*`, `nuxt.config.*`, `vite.config.*` + deps in package.json
 - Test runners: `vitest.config.*`, `jest.config.*`, `playwright.config.*`, `cypress.config.*`
 
@@ -783,12 +811,22 @@ Markdown report sections:
 - **Milestone**: `bugscrub run` is implemented end-to-end with adapter selection, capability negotiation, prompt construction, diagnostics, report generation, and automated coverage for dry-run/live-run paths. Real-agent smoke remains part of verification before release, not a blocker for starting Phase 4.
 
 ### Phase 4 — Generate + Polish (Next)
-- `src/commands/generate.ts` — workflow draft generation from `--from-diff`, `--from-tests`, `--from-route`, `--from-workflow`
+- `src/commands/generate.ts` — workflow draft generation from interactive source selection plus explicit `--from-route` / `--from-workflow`
 - `src/generate/` — source readers (diff parser, test scanner, route resolver, workflow cloner) + draft writer
-- `README.md`
+- Monorepo UX polish for package-scoped commands: keep interactive workspace selection in TTY mode, upgrade it to the shared arrow-key picker style, and add a simple BugScrub-level `--filter <workspace>` option for exact package-name or relative-path targeting
+- `--filter <workspace>` v0 semantics: exact match on package name or relative path only; implement it as a top-level/pre-command flag for package-scoped commands rather than mirroring full pnpm selector/filter syntax
+- `src/init/author.ts`, `src/utils/logger.ts` — improve terminal transcript rendering for agent output
+- Evaluate lightweight stdout-formatting dependencies for terminal markdown/diff readability (`marked` + `marked-terminal`, `cli-highlight`, `wrap-ansi`; add only if they eliminate at least ~40 lines of custom parsing/wrapping code or replace a parser we would otherwise maintain ourselves)
+- Add width-aware wrapping, markdown block rendering, diff hunk/file emphasis, and truncation/filtering for noisy generated assets or extremely long lines in streamed agent output
+- `README.md` — usage guide with quickstart, command-by-command examples, expected repo layout, and realistic init/run/generate flows. Command and flag documentation.
+- `docs/` — architecture/process docs and diagrams for init → discover → generate → run, plus directory ownership notes for `src/`
+- Add maintainer-facing docs/TODOs for future `AgentAdapter` implementations (`opencode`, `gemini`, `copilot`, etc.), including required interface points, capability negotiation expectations, and test requirements
+- Code organization and maintainability pass: verify module boundaries, standardize terminology on `AgentAdapter`/adapter rather than mixed handler/harness terms, and add concise top-of-file/module comments plus targeted explanations for complex logic
 - Unit tests: each `--from-*` mode with fixture inputs → assert draft YAML shape
 - Snapshot tests for scaffolder output
-- **Milestone**: Full v0 feature set; `bugscrub generate --from-diff` produces a useful draft workflow; publish as `bugscrub@0.1.0`
+- Snapshot tests for transcript formatting and long-line/noisy-diff handling
+- Coverage review and gap-closing for core flows before Phase 4 exit, especially around adapters, prompt/build plumbing, formatting, and generate modes
+- **Milestone**: Full v0 feature set; `bugscrub generate` produces useful drafts from local changes, branch comparison, tests, routes, and workflow cloning; monorepo package targeting is clear in both interactive and scripted use; `init`/`discover` authoring output remains readable for markdown- and diff-heavy agent transcripts; the codebase/docs make extension points and directory responsibilities obvious; publish as `bugscrub@0.1.0`
 
 ---
 
@@ -832,4 +870,10 @@ All error messages go to `stderr` in human-readable format. No structured JSON e
 12. `bugscrub run --workflow workflows/api-requests.yaml` — Real Claude Code or Codex session completes (manual smoke before release)
 13. From `sandbox/vue-rbac-app`, `node ../../dist/index.js validate` — Validates a realistic local sandbox repo
 14. `bugscrub generate --from-route /checkout --dry-run` — Prints draft workflow YAML without writing
-15. `bugscrub generate --from-diff` — Produces a draft workflow for changed surfaces (manual test in real repo)
+15. `bugscrub generate` in an interactive terminal — Presents source options for local changes, compare-to-branch, and tests, then produces a draft workflow for the selected source (manual test in real repo)
+16. `bugscrub init` in `sandbox/vue-rbac-app` — Agent transcript output is wrapped and readable; markdown sections are visually distinct; generated-file diffs do not dominate the terminal stream
+17. README quickstart + command examples are accurate against the shipped CLI and validated in the sandbox repo
+18. `docs/` includes at least one architecture/process diagram and a maintainer-facing guide for adding a new `AgentAdapter`
+19. Spot review of `src/` confirms directory purposes are documented, complex modules have concise explanatory comments, and terminology is consistent across code and docs
+20. In `tests/fixtures/repos/pnpm-workspace`, `bugscrub init` / `discover` in a TTY present an arrow-key workspace picker when multiple packages are available
+21. In `tests/fixtures/repos/pnpm-workspace`, `bugscrub --filter apps/web init` and `bugscrub --filter workspace-web discover` target the expected package without prompting

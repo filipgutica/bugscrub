@@ -5,13 +5,13 @@ import { logger } from '../utils/logger.js'
 export const registerGenerateCommand = (program: Command): void => {
   program
     .command('generate')
-    .description('Draft workflow YAML from a diff, tests, route, or workflow.')
-    .option('--from-diff', 'Generate draft workflows from the current git diff.')
-    .option('--from-tests', 'Generate draft workflows from existing tests.')
+    .description(
+      'Draft workflow YAML from an interactive source picker, a route, or an existing workflow.'
+    )
     .option('--from-route <path>', 'Generate a draft workflow for a route.')
     .option(
       '--from-workflow <path>',
-      'Generate a draft workflow by cloning an existing workflow.'
+      'Generate a draft workflow by cloning and adapting an existing workflow.'
     )
     .option('--output <filename>', 'Write the draft to a specific filename.')
     .option('--force', 'Overwrite an existing workflow file.')

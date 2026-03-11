@@ -2,7 +2,6 @@ import { getJsonSchemaByType } from '../../schemas/index.js'
 import { CliError } from '../../utils/errors.js'
 import { runCommand, isCommandAvailable } from './process.js'
 import type { AdapterRunOutput, AgentAdapter, AgentCapabilities, RunContext } from './types.js'
-import { buildClaudePrompt } from '../prompt/builder.js'
 import { parseRunResultOutput } from './result.js'
 
 const claudeCapabilities: AgentCapabilities = {
@@ -43,9 +42,6 @@ export class ClaudeAdapter implements AgentAdapter {
       })
     }
 
-    const prompt = buildClaudePrompt({
-      context
-    })
     const schema = JSON.stringify(getJsonSchemaByType({ type: 'run-result' }))
     const command = await runCommand({
       command: 'claude',
@@ -60,7 +56,7 @@ export class ClaudeAdapter implements AgentAdapter {
         '--dangerously-skip-permissions',
         '--max-budget-usd',
         String(context.maxBudgetUsd),
-        prompt
+        context.prompt
       ]
     })
 

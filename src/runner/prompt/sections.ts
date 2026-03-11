@@ -1,10 +1,10 @@
 import { getJsonSchemaByType } from '../../schemas/index.js'
 import type {
+  BaseRunContext,
   ResolvedAssertion,
   ResolvedCapability,
   ResolvedIdentity,
-  ResolvedTaskStep,
-  RunContext
+  ResolvedTaskStep
 } from '../agent/types.js'
 
 const formatIdentity = ({
@@ -99,7 +99,7 @@ export const roleSection = (): string => {
 export const targetSection = ({
   context
 }: {
-  context: RunContext
+  context: BaseRunContext
 }): string => {
   return [
     '## Target application',
@@ -114,7 +114,7 @@ export const targetSection = ({
 export const authenticationSection = ({
   context
 }: {
-  context: RunContext
+  context: BaseRunContext
 }): string => {
   return [
     '## Authentication',
@@ -127,7 +127,7 @@ export const authenticationSection = ({
 export const sessionSetupSection = ({
   context
 }: {
-  context: RunContext
+  context: BaseRunContext
 }): string => {
   const lines = ['## Session setup']
   let previousIdentity: ResolvedIdentity | undefined
@@ -155,7 +155,7 @@ export const sessionSetupSection = ({
 export const explorationSection = ({
   context
 }: {
-  context: RunContext
+  context: BaseRunContext
 }): string => {
   const lines = ['## Exploration tasks']
   let previousIdentity: ResolvedIdentity | undefined =
@@ -181,7 +181,7 @@ export const explorationSection = ({
 export const hardAssertionsSection = ({
   context
 }: {
-  context: RunContext
+  context: BaseRunContext
 }): string => {
   return [
     '## Hard assertions checklist',
@@ -193,7 +193,7 @@ export const hardAssertionsSection = ({
 export const evidenceSection = ({
   context
 }: {
-  context: RunContext
+  context: BaseRunContext
 }): string => {
   return [
     '## Evidence instructions',

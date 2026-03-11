@@ -206,16 +206,22 @@ Validates workflow, surface, capability, and config YAML against the schema.
 
 ### `generate`
 
-Creates draft workflow YAMLs from a source of truth: a git diff, existing tests, a route, or an existing workflow.
+Creates draft workflow YAMLs from an interactive source picker, a route, or an existing workflow.
 
 ```bash
-bugscrub generate --from-diff                                   # draft workflows for changed surfaces
-bugscrub generate --from-tests                                  # draft workflows adjacent to existing test coverage
-bugscrub generate --from-route /checkout                        # draft workflow for one surface
-bugscrub generate --from-workflow .bugscrub/workflows/x.yaml   # clone and adapt an existing workflow
+bugscrub generate                                              # interactive source selection
+bugscrub generate --from-route /checkout                       # draft workflow for one surface
+bugscrub generate --from-workflow .bugscrub/workflows/x.yaml  # clone and adapt an existing workflow
 ```
 
-`init` runs once. `generate` runs whenever features, diffs, routes, or tests change.
+The interactive mode should offer:
+
+* from current local changes
+* compare current branch to `main`
+* compare current branch to another branch
+* from tests
+
+`init` runs once. `generate` runs whenever features, local changes, routes, or tests change.
 
 ### `run`
 

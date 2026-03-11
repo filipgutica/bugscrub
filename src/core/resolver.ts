@@ -148,15 +148,6 @@ const validateWorkflow = ({
   workflowPath: string
   issues: ValidationIssue[]
 }) => {
-  if (!(workflow.target.env in config.envs)) {
-    pushIssue({
-      issues,
-      path: basename(workflowPath),
-      message: `target.env "${workflow.target.env}" does not exist in bugscrub.config.yaml.`
-    })
-    return
-  }
-
   const environment = config.envs[workflow.target.env]
 
   if (!environment) {

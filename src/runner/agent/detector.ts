@@ -37,7 +37,7 @@ export const detectAndSelectAdapter = async ({
       message: [
         `No supported agent runtime is available for preference "${config.agent.preferred}".`,
         `Detected runtimes: ${found}.`,
-        'Install `claude` or `codex`, or update `agent.preferred` in `.bugscrub/bugscrub.config.yaml`.'
+        'Docker is required, and the selected agent must have either env-based auth or a readable CLI login available.'
       ].join('\n'),
       exitCode: 1
     })

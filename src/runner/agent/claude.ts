@@ -1,8 +1,6 @@
-import { getJsonSchemaByType } from '../../schemas/index.js'
+import { detectAvailableContainerAgents, runAgentInContainer } from '../../agent-runtime/container.js'
 import { CliError } from '../../utils/errors.js'
-import { runCommand, isCommandAvailable } from './process.js'
 import type { AdapterRunOutput, AgentAdapter, AgentCapabilities, RunContext } from './types.js'
-import { buildClaudePrompt } from '../prompt/builder.js'
 import { parseRunResultOutput } from './result.js'
 
 const claudeCapabilities: AgentCapabilities = {
@@ -25,9 +23,8 @@ export class ClaudeAdapter implements AgentAdapter {
   public readonly name = 'claude' as const
 
   public async detect(): Promise<boolean> {
-    return isCommandAvailable({
-      command: 'claude'
-    })
+    const available = await detectAvailableContainerAgents()
+    return available.includes('claude')
   }
 
   public async getCapabilities(): Promise<AgentCapabilities> {
@@ -35,33 +32,20 @@ export class ClaudeAdapter implements AgentAdapter {
   }
 
   public async run(context: RunContext): Promise<AdapterRunOutput> {
-    if (!context.config.agent.allowDangerousPermissions) {
+    if (!context.containerSessionRoot) {
       throw new CliError({
-        message:
-          'Claude Code runs require `agent.allowDangerousPermissions: true` in `.bugscrub/bugscrub.config.yaml`.',
+        message: 'Claude runs now require a container session root.',
         exitCode: 1
       })
     }
 
-    const prompt = buildClaudePrompt({
-      context
-    })
-    const schema = JSON.stringify(getJsonSchemaByType({ type: 'run-result' }))
-    const command = await runCommand({
-      command: 'claude',
+    const command = await runAgentInContainer({
+      agent: 'claude',
       cwd: context.cwd,
-      timeoutMs: context.timeoutSeconds * 1_000,
-      args: [
-        '--print',
-        '--output-format',
-        'json',
-        '--json-schema',
-        schema,
-        '--dangerously-skip-permissions',
-        '--max-budget-usd',
-        String(context.maxBudgetUsd),
-        prompt
-      ]
+      prompt: context.prompt,
+      schemaPath: context.artifacts.responseSchemaPath,
+      sessionRoot: context.containerSessionRoot,
+      timeoutMs: context.timeoutSeconds * 1_000
     })
 
     if (command.exitCode !== 0) {
@@ -72,16 +56,13 @@ export class ClaudeAdapter implements AgentAdapter {
     }
 
     const trimmed = command.stdout.trim()
-    const { parsed, result } = parseRunResultOutput({
+    const { result } = parseRunResultOutput({
       agent: 'claude',
       output: trimmed
     })
 
     return {
       artifacts: {
-        raw: {
-          response: parsed
-        },
         stderr: command.stderr,
         stdout: command.stdout
       },

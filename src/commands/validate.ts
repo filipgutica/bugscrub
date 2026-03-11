@@ -3,17 +3,24 @@ import { Command } from 'commander'
 import { loadBugScrubConfig } from '../core/config.js'
 import { loadWorkspaceFiles } from '../core/loader.js'
 import { validateWorkspaceDefinition } from '../core/resolver.js'
+import { selectWorkspacePackage } from '../init/package-selection.js'
 import { CliError, ValidationError } from '../utils/errors.js'
 import { logger } from '../utils/logger.js'
 
 export const runValidateCommand = async ({
-  cwd
+  cwd,
+  filter
 }: {
   cwd: string
+  filter?: string
 }): Promise<void> => {
   try {
-    const config = await loadBugScrubConfig({ cwd })
-    const workspace = await loadWorkspaceFiles({ cwd })
+    const { packageRoot } = await selectWorkspacePackage({
+      cwd,
+      ...(filter ? { filter } : {})
+    })
+    const config = await loadBugScrubConfig({ cwd: packageRoot })
+    const workspace = await loadWorkspaceFiles({ cwd: packageRoot })
     const result = validateWorkspaceDefinition({
       config,
       surfaces: workspace.surfaces,
@@ -49,7 +56,12 @@ export const registerValidateCommand = (program: Command): void => {
   program
     .command('validate')
     .description('Validate BugScrub config and workflow files.')
-    .action(async () => {
-      await runValidateCommand({ cwd: process.cwd() })
+    .action(async (_options: object, command: Command) => {
+      const globals = command.optsWithGlobals() as { filter?: string }
+
+      await runValidateCommand({
+        cwd: process.cwd(),
+        ...(globals.filter ? { filter: globals.filter } : {})
+      })
     })
 }

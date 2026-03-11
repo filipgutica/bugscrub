@@ -4,6 +4,9 @@ import { nameSchema, nonEmptyStringSchema } from './common.js'
 
 export const authConfigSchema = z.union([
   z.object({
+    type: z.literal('none')
+  }),
+  z.object({
     type: z.literal('env'),
     usernameEnvVar: nonEmptyStringSchema,
     passwordEnvVar: nonEmptyStringSchema
@@ -34,8 +37,7 @@ export const bugScrubConfigSchema = z
       preferred: z.enum(['auto', 'claude', 'codex']).default('auto'),
       timeout: z.number().int().positive(),
       maxBudgetUsd: z.number().positive(),
-      maxSteps: z.number().int().positive().optional(),
-      allowDangerousPermissions: z.boolean().optional()
+      maxSteps: z.number().int().positive().optional()
     })
   })
   .superRefine(({ defaultEnv, envs }, context) => {

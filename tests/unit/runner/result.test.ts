@@ -24,6 +24,47 @@ describe('parseRunResultOutput', () => {
     expect(parsed.result.status).toBe('passed')
   })
 
+  it('strips codex null placeholders for optional fields before validation', () => {
+    const parsed = parseRunResultOutput({
+      agent: 'codex',
+      output: JSON.stringify({
+        status: 'passed',
+        startedAt: '2026-03-10T17:00:00.000Z',
+        completedAt: '2026-03-10T17:00:02.000Z',
+        durationMs: 2000,
+        findings: [
+          {
+            severity: 'low',
+            title: 'Example',
+            description: 'Example description',
+            reproductionSteps: ['Open the page'],
+            evidence: null
+          }
+        ],
+        assertionResults: [
+          {
+            assertion: 'title-visible',
+            status: 'passed',
+            summary: 'Title is visible',
+            evidence: {
+              screenshot: null,
+              networkLog: null
+            }
+          }
+        ],
+        evidence: {
+          screenshots: [],
+          networkLogs: []
+        },
+        transcriptPath: null
+      })
+    })
+
+    expect(parsed.result.findings[0]?.evidence).toBeUndefined()
+    expect(parsed.result.assertionResults[0]?.evidence).toEqual({})
+    expect(parsed.result.transcriptPath).toBeUndefined()
+  })
+
   it('wraps malformed output in a CliError', () => {
     expect(() =>
       parseRunResultOutput({

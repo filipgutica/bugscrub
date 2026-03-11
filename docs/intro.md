@@ -204,18 +204,35 @@ Scans the repo, detects app/test structure, and scaffolds a draft `.bugscrub/` l
 
 Validates workflow, surface, capability, and config YAML against the schema.
 
-### `generate`
-
-Creates draft workflow YAMLs from a source of truth: a git diff, existing tests, a route, or an existing workflow.
+In a pnpm monorepo, package-scoped commands can target a workspace from the root with:
 
 ```bash
-bugscrub generate --from-diff                                   # draft workflows for changed surfaces
-bugscrub generate --from-tests                                  # draft workflows adjacent to existing test coverage
-bugscrub generate --from-route /checkout                        # draft workflow for one surface
-bugscrub generate --from-workflow .bugscrub/workflows/x.yaml   # clone and adapt an existing workflow
+bugscrub --filter apps/web validate
+bugscrub --filter workspace-admin run --workflow smoke-check --dry-run
 ```
 
-`init` runs once. `generate` runs whenever features, diffs, routes, or tests change.
+### `generate`
+
+Creates draft workflow YAMLs from an interactive source picker, a route, or an existing workflow.
+
+```bash
+bugscrub generate                                              # interactive source selection
+bugscrub generate --from-route /checkout                       # draft workflow for one surface
+bugscrub generate --from-workflow .bugscrub/workflows/x.yaml  # clone and adapt an existing workflow
+```
+
+The interactive mode should offer:
+
+* from current local changes
+* compare current branch to `main`
+* compare current branch to another branch
+* from tests
+
+Route mode first checks existing `.bugscrub/surfaces/*/surface.yaml` files for an exact route match. If none exists, it generates a workflow draft against an inferred stub surface and leaves TODO capability markers instead of pretending the missing surface already exists.
+
+Test mode re-runs lightweight repo detection at generate time. It does not rely on test-runner metadata persisted by `init`.
+
+`init` runs once. `generate` runs whenever features, local changes, routes, or tests change.
 
 ### `run`
 

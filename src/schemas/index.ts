@@ -1,4 +1,4 @@
-import { zodToJsonSchema } from 'zod-to-json-schema'
+import { z } from 'zod'
 
 import { assertionSchema } from './assertion.schema.js'
 import { capabilitySchema } from './capability.schema.js'
@@ -41,8 +41,19 @@ export const getJsonSchemaByType = ({ type }: { type: SchemaType }) => {
     return runResultJsonSchema
   }
 
-  return zodToJsonSchema(getSchemaByType({ type }) as never, {
-    name: getSchemaDefinitionName({ type }),
-    target: 'jsonSchema7'
+  const definitionName = getSchemaDefinitionName({ type })
+  const definitionSchema = z.toJSONSchema(getSchemaByType({ type }), {
+    target: 'draft-7'
   })
+
+  return {
+    $schema: 'http://json-schema.org/draft-07/schema#',
+    $ref: `#/definitions/${definitionName}`,
+    definitions: {
+      [definitionName]: {
+        ...definitionSchema,
+        $schema: undefined
+      }
+    }
+  }
 }

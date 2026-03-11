@@ -22,6 +22,9 @@ describe('runSchemaCommand', () => {
 
     expect(parsed.$ref).toBe('#/definitions/workflowSchema')
     expect(parsed.definitions.workflowSchema).toBeDefined()
+    expect(parsed.definitions.workflowSchema.type).toBe('object')
+    expect(parsed.definitions.workflowSchema.properties.name.type).toBe('string')
+    expect(parsed.definitions.workflowSchema.properties.target.type).toBe('object')
   })
 
   it('supports the run-result schema type', () => {

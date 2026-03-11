@@ -158,9 +158,6 @@
         "transcriptPath": {
           "type": "string",
           "minLength": 1
-        },
-        "raw": {
-          "type": "object"
         }
       }
     }

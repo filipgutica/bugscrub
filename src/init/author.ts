@@ -1,23 +1,38 @@
-import { chmod, cp, mkdtemp, rename, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import * as readline from 'node:readline'
-import { fileURLToPath } from 'node:url'
 
 import chalk from 'chalk'
+
+import {
+  createDisposableWorkspace,
+  detectAvailableContainerAgents,
+  ensureDockerRuntime,
+  runAgentInContainer,
+  syncBugscrubWorkspace
+} from '../agent-runtime/container.js'
+import { runCommand } from '../runner/agent/process.js'
 import type { BugScrubConfig } from '../types/index.js'
 import { CliError } from '../utils/errors.js'
-import { logger } from '../utils/logger.js'
 import { writeTextFile } from '../utils/fs.js'
-import { runCommand, isCommandAvailable } from '../runner/agent/process.js'
+import { logger } from '../utils/logger.js'
+import { promptForChoice } from '../utils/tty-select.js'
+import { parseYaml, stringifyYaml } from '../utils/yaml.js'
+import { createTranscriptRenderer, renderTranscriptText } from './transcript.js'
 
 export type InitAuthorAgent = 'claude' | 'codex'
 
 export type InitAuthorResult = {
   agent: InitAuthorAgent
+  authoredFiles?: string[]
   logPath: string
   stderr: string
   stdout: string
+}
+
+type AuthoringWorkspaceConfig = BugScrubConfig & {
+  agent: BugScrubConfig['agent'] & {
+    preferred: InitAuthorAgent
+  }
 }
 
 const AUTHORING_STRIPPED_ENV_VARS = [
@@ -26,258 +41,121 @@ const AUTHORING_STRIPPED_ENV_VARS = [
   'VSCODE_INSPECTOR_OPTIONS'
 ] as const
 
+const AUTHORING_ALLOWED_ENV_KEYS = new Set([
+  'APPDATA',
+  'CI',
+  'COLORTERM',
+  'COMSPEC',
+  'FORCE_COLOR',
+  'HOME',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'HTTPS_PROXY',
+  'HTTP_PROXY',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'LOCALAPPDATA',
+  'LOGNAME',
+  'NO_COLOR',
+  'NO_PROXY',
+  'PATH',
+  'SHELL',
+  'SystemRoot',
+  'TEMP',
+  'TERM',
+  'TMP',
+  'TMPDIR',
+  'USER',
+  'USERNAME',
+  'USERPROFILE',
+  'XDG_CACHE_HOME',
+  'XDG_CONFIG_HOME',
+  'XDG_STATE_HOME'
+])
+
+const AUTHORING_ALLOWED_ENV_PREFIXES = [
+  'ANTHROPIC_',
+  'AWS_',
+  'CLAUDE_CODE_',
+  'CODEX_',
+  'OPENAI_'
+] as const
+
+const AUTHORING_SENSITIVE_ENV_PATTERNS = [
+  /TOKEN/i,
+  /SECRET/i,
+  /PASSWORD/i,
+  /KEY/i
+] as const
+
+const AUTHORING_EXCLUDED_NAMES = new Set([
+  '.aws',
+  '.env',
+  '.git',
+  '.gnupg',
+  '.npmrc',
+  '.pnpmrc',
+  '.ssh',
+  '.terraform',
+  '.yarnrc',
+  '.yarnrc.yml',
+  'id_ed25519',
+  'id_rsa',
+  'node_modules'
+])
+
+const AUTHORING_EXCLUDED_PATTERNS = [
+  /^\.env\./i,
+  /^service-account.*\.json$/i,
+  /\.(?:cer|crt|der|key|kdbx|p12|pem|pfx)$/i
+] as const
+
+const MAX_AUTHORING_VALIDATION_ATTEMPTS = 3
+
 const promptForAgentSelection = async ({
   agents
 }: {
   agents: InitAuthorAgent[]
 }): Promise<InitAuthorAgent> => {
-  const input = process.stdin
-  const output = process.stdout
-  let selectedIndex = 0
-  let lineCount = 0
-  let rendered = false
-
-  const render = (): void => {
-    const lines = [
-      'Select an authoring agent:',
-      ...agents.map((agent, index) =>
-        `${index === selectedIndex ? chalk.cyan('>') : ' '} ${index === selectedIndex ? chalk.bold(agent) : agent}`
-      ),
-      chalk.gray('Use up/down arrows and press Enter.')
-    ]
-
-    if (rendered) {
-      output.write(`\x1b[${lineCount}F`)
-    } else {
-      output.write('\x1b[?25l')
-    }
-
-    for (const line of lines) {
-      output.write(`\x1b[2K${line}\n`)
-    }
-
-    lineCount = lines.length
-    rendered = true
-  }
-
-  try {
-    readline.emitKeypressEvents(input)
-
-    if (typeof input.setRawMode === 'function') {
-      input.setRawMode(true)
-    }
-
-    render()
-
-    return await new Promise<InitAuthorAgent>((resolve, reject) => {
-      const onKeypress = (_: string, key: readline.Key): void => {
-        if (key.name === 'up') {
-          selectedIndex = selectedIndex === 0 ? agents.length - 1 : selectedIndex - 1
-          render()
-          return
-        }
-
-        if (key.name === 'down') {
-          selectedIndex = selectedIndex === agents.length - 1 ? 0 : selectedIndex + 1
-          render()
-          return
-        }
-
-        if (key.name === 'return') {
-          input.off('keypress', onKeypress)
-          resolve(agents[selectedIndex]!)
-          return
-        }
-
-        if (key.ctrl && key.name === 'c') {
-          input.off('keypress', onKeypress)
-          reject(
-            new CliError({
-              message: 'Agent selection was cancelled.',
-              exitCode: 1
-            })
-          )
-        }
-      }
-
-      input.on('keypress', onKeypress)
-    })
-  } finally {
-    if (typeof input.setRawMode === 'function') {
-      input.setRawMode(false)
-    }
-
-    if (rendered) {
-      output.write(`\x1b[${lineCount}F`)
-      for (let index = 0; index < lineCount; index += 1) {
-        output.write('\x1b[2K\n')
-      }
-      output.write(`\x1b[${lineCount}F`)
-      output.write('\x1b[?25h')
-    }
-  }
+  return promptForChoice({
+    choices: agents.map((agent) => ({
+      label: chalk.bold(agent),
+      value: agent
+    })),
+    footer: chalk.gray('Use up/down arrows and press Enter.'),
+    title: 'Select an authoring agent:'
+  })
 }
 
-const formatTranscriptLine = ({
-  line,
-  stderr
+export { renderTranscriptText } from './transcript.js'
+
+const buildValidationFeedbackPrompt = ({
+  attempt,
+  basePrompt,
+  validationMessage
 }: {
-  line: string
-  stderr: boolean
+  attempt: number
+  basePrompt: string
+  validationMessage: string
 }): string => {
-  if (line.length === 0) {
-    return ''
-  }
-
-  const lower = line.toLowerCase()
-
-  if (line === 'codex' || line === 'claude') {
-    return chalk.bold.blue(line)
-  }
-
-  if (
-    lower.includes('error') ||
-    lower.includes('failed') ||
-    lower.includes('fatal') ||
-    lower.startsWith('err:')
-  ) {
-    return chalk.red(line)
-  }
-
-  if (lower.includes('warning') || lower.startsWith('warn:')) {
-    return chalk.yellow(line)
-  }
-
-  if (stderr) {
-    return chalk.gray(line)
-  }
-
-  if (line === 'exec' || line === 'file update:' || line === 'tokens used') {
-    return chalk.bold.magenta(line)
-  }
-
-  if (line.startsWith('diff --git ')) {
-    return chalk.bold.yellow(line)
-  }
-
-  if (line.startsWith('+++ ')) {
-    return chalk.green(line)
-  }
-
-  if (line.startsWith('--- ')) {
-    return chalk.red(line)
-  }
-
-  if (line.startsWith('@@')) {
-    return chalk.cyan(line)
-  }
-
-  if (line.startsWith('+') && !line.startsWith('+++')) {
-    return chalk.green(line)
-  }
-
-  if (line.startsWith('-') && !line.startsWith('---')) {
-    return chalk.red(line)
-  }
-
-  if (line.startsWith('# ')) {
-    return chalk.bold.cyan(line)
-  }
-
-  if (line.startsWith('## ') || line.startsWith('### ')) {
-    return chalk.bold(line)
-  }
-
-  if (line.startsWith('bugscrub ')) {
-    return `${chalk.blue('bugscrub')} ${line.slice('bugscrub '.length)}`
-  }
-
-  if (line.startsWith('/bin/') || line.startsWith('.bugscrub/') || line.startsWith('index ')) {
-    return chalk.gray(line)
-  }
-
-  return line
-}
-
-const createTranscriptRenderer = () => {
-  let stdoutBuffer = ''
-  let stderrBuffer = ''
-
-  const flushBuffer = ({
-    buffer,
-    stderr
-  }: {
-    buffer: string
-    stderr: boolean
-  }): string => {
-    const lines = buffer.split('\n')
-    const remainder = lines.pop() ?? ''
-
-    for (const line of lines) {
-      const formatted = formatTranscriptLine({
-        line,
-        stderr
-      })
-      const stream = stderr ? process.stderr : process.stdout
-      stream.write(`${formatted}\n`)
-    }
-
-    return remainder
-  }
-
-  return {
-    flush: (): void => {
-      if (stdoutBuffer.length > 0) {
-        process.stdout.write(
-          `${formatTranscriptLine({
-            line: stdoutBuffer,
-            stderr: false
-          })}\n`
-        )
-        stdoutBuffer = ''
-      }
-
-      if (stderrBuffer.length > 0) {
-        process.stderr.write(
-          `${formatTranscriptLine({
-            line: stderrBuffer,
-            stderr: true
-          })}\n`
-        )
-        stderrBuffer = ''
-      }
-    },
-    pushStderr: (chunk: string): void => {
-      stderrBuffer += chunk
-      stderrBuffer = flushBuffer({
-        buffer: stderrBuffer,
-        stderr: true
-      })
-    },
-    pushStdout: (chunk: string): void => {
-      stdoutBuffer += chunk
-      stdoutBuffer = flushBuffer({
-        buffer: stdoutBuffer,
-        stderr: false
-      })
-    }
-  }
+  return [
+    basePrompt,
+    '',
+    '# Validation feedback',
+    `Your previous authoring pass produced BugScrub files that failed validation on attempt ${attempt}.`,
+    'Fix only the reported BugScrub validation issues, preserve unrelated authored work, then stop.',
+    'Use `bugscrub schema <type>` if you need the exact schema shape for a file before editing it.',
+    '',
+    'Validation output:',
+    '```',
+    validationMessage,
+    '```'
+  ].join('\n')
 }
 
 const detectAvailableAgents = async (): Promise<InitAuthorAgent[]> => {
-  const [hasClaude, hasCodex] = await Promise.all([
-    isCommandAvailable({
-      command: 'claude'
-    }),
-    isCommandAvailable({
-      command: 'codex'
-    })
-  ])
-
-  return [
-    ...(hasClaude ? (['claude'] as const) : []),
-    ...(hasCodex ? (['codex'] as const) : [])
-  ]
+  return detectAvailableContainerAgents()
 }
 
 export const selectAuthoringAgent = async ({
@@ -297,7 +175,7 @@ export const selectAuthoringAgent = async ({
       message: [
         'No supported authoring agent runtime is available.',
         'Detected runtimes: none.',
-        'Install `claude` or `codex`, or update `agent.preferred` in `.bugscrub/bugscrub.config.yaml`.'
+        'Docker is required, and the selected agent must have either env-based auth or a readable CLI login available.'
       ].join('\n'),
       exitCode: 1
     })
@@ -357,11 +235,13 @@ export const selectAuthoringAgent = async ({
 const writeAuthoringLog = async ({
   agent,
   cwd,
+  env,
   stderr,
   stdout
 }: {
   agent: InitAuthorAgent
   cwd: string
+  env: NodeJS.ProcessEnv
   stderr: string
   stdout: string
 }): Promise<string> => {
@@ -372,10 +252,20 @@ const writeAuthoringLog = async ({
       `# Authoring log (${agent})`,
       '',
       '## stdout',
-      stdout.length > 0 ? stdout : '(empty)',
+      stdout.length > 0
+        ? redactSensitiveText({
+            env,
+            text: stdout
+          })
+        : '(empty)',
       '',
       '## stderr',
-      stderr.length > 0 ? stderr : '(empty)',
+      stderr.length > 0
+        ? redactSensitiveText({
+            env,
+            text: stderr
+          })
+        : '(empty)',
       ''
     ].join('\n')
   })
@@ -383,9 +273,39 @@ const writeAuthoringLog = async ({
   return logPath
 }
 
-const copyFilter = (source: string): boolean => {
+export const redactSensitiveText = ({
+  env,
+  text
+}: {
+  env: NodeJS.ProcessEnv
+  text: string
+}): string => {
+  let redacted = text
+
+  for (const [key, value] of Object.entries(env)) {
+    if (
+      typeof value === 'string' &&
+      value.length >= 6 &&
+      AUTHORING_SENSITIVE_ENV_PATTERNS.some((pattern) => pattern.test(key))
+    ) {
+      redacted = redacted.split(value).join(`[REDACTED:${key}]`)
+    }
+  }
+
+  return redacted
+}
+
+export const shouldCopyAuthoringPath = ({
+  source
+}: {
+  source: string
+}): boolean => {
   const relativePath = basename(source)
-  return relativePath !== '.git' && relativePath !== 'node_modules'
+
+  return (
+    !AUTHORING_EXCLUDED_NAMES.has(relativePath) &&
+    !AUTHORING_EXCLUDED_PATTERNS.some((pattern) => pattern.test(relativePath))
+  )
 }
 
 export const createAuthoringEnv = ({
@@ -395,8 +315,17 @@ export const createAuthoringEnv = ({
   baseEnv?: NodeJS.ProcessEnv
   pathPrefix: string
 }): NodeJS.ProcessEnv => {
-  const env = {
-    ...(baseEnv ?? process.env)
+  const sourceEnv = baseEnv ?? process.env
+  const env: NodeJS.ProcessEnv = {}
+
+  for (const [key, value] of Object.entries(sourceEnv)) {
+    if (
+      value !== undefined &&
+      (AUTHORING_ALLOWED_ENV_KEYS.has(key) ||
+        AUTHORING_ALLOWED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix)))
+    ) {
+      env[key] = value
+    }
   }
 
   for (const key of AUTHORING_STRIPPED_ENV_VARS) {
@@ -408,47 +337,27 @@ export const createAuthoringEnv = ({
   return env
 }
 
-const createIsolatedWorkspace = async ({
-  cwd
+export const pinAuthoringAgentPreference = async ({
+  agent,
+  tempWorkspaceRoot
 }: {
-  cwd: string
-}): Promise<{
-  cleanup: () => Promise<void>
-  env: NodeJS.ProcessEnv
+  agent: InitAuthorAgent
   tempWorkspaceRoot: string
-}> => {
-  const sessionRoot = await mkdtemp(join(tmpdir(), 'bugscrub-author-'))
-  const tempWorkspaceRoot = join(sessionRoot, 'workspace')
-  const tempBinRoot = join(sessionRoot, 'bin')
-  const cliEntryPath = fileURLToPath(new URL('../index.ts', import.meta.url))
-  const tsxImportPath = fileURLToPath(import.meta.resolve('tsx'))
-  const wrapperPath = join(tempBinRoot, 'bugscrub')
+}): Promise<void> => {
+  const configPath = join(tempWorkspaceRoot, '.bugscrub', 'bugscrub.config.yaml')
+  const configSource = await readFile(configPath, 'utf8')
+  const parsedConfig = parseYaml<AuthoringWorkspaceConfig>(configSource)
 
-  await cp(cwd, tempWorkspaceRoot, {
-    filter: copyFilter,
-    recursive: true
-  })
   await writeTextFile({
-    path: wrapperPath,
-    contents: [
-      '#!/bin/sh',
-      `exec node --import "${tsxImportPath}" "${cliEntryPath}" "$@"`
-    ].join('\n')
+    path: configPath,
+    contents: stringifyYaml({
+      ...parsedConfig,
+      agent: {
+        ...parsedConfig.agent,
+        preferred: agent
+      }
+    })
   })
-  await chmod(wrapperPath, 0o755)
-
-  return {
-    cleanup: async () => {
-      await rm(sessionRoot, {
-        force: true,
-        recursive: true
-      })
-    },
-    env: createAuthoringEnv({
-      pathPrefix: tempBinRoot
-    }),
-    tempWorkspaceRoot
-  }
 }
 
 export const syncAuthoredWorkspace = async ({
@@ -457,198 +366,87 @@ export const syncAuthoredWorkspace = async ({
 }: {
   cwd: string
   tempWorkspaceRoot: string
-}): Promise<void> => {
-  const realBugscrubRoot = join(cwd, '.bugscrub')
-  const tempBugscrubRoot = join(tempWorkspaceRoot, '.bugscrub')
-  const syncRoot = await mkdtemp(join(cwd, '.bugscrub-sync-'))
-  const stagedBugscrubRoot = join(syncRoot, '.bugscrub')
-  const backupBugscrubRoot = join(syncRoot, '.bugscrub-backup')
-
-  await cp(tempBugscrubRoot, stagedBugscrubRoot, {
-    recursive: true
-  })
-
-  let movedExistingWorkspace = false
-
-  try {
-    await rename(realBugscrubRoot, backupBugscrubRoot)
-    movedExistingWorkspace = true
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      await rm(syncRoot, {
-        force: true,
-        recursive: true
-      })
-      throw error
-    }
-  }
-
-  try {
-    await rename(stagedBugscrubRoot, realBugscrubRoot)
-  } catch (error) {
-    if (movedExistingWorkspace) {
-      await rename(backupBugscrubRoot, realBugscrubRoot)
-    }
-
-    await rm(syncRoot, {
-      force: true,
-      recursive: true
-    })
-    throw error
-  }
-
-  await rm(syncRoot, {
-    force: true,
-    recursive: true
+}): Promise<string[]> => {
+  return syncBugscrubWorkspace({
+    cwd,
+    tempWorkspaceRoot
   })
 }
 
-const runCodexAuthoring = async ({
-  cwd,
-  prompt,
+const validateAuthoredWorkspace = async ({
+  env,
+  tempWorkspaceRoot,
   timeoutSeconds
 }: {
-  cwd: string
-  prompt: string
+  env: NodeJS.ProcessEnv
+  tempWorkspaceRoot: string
   timeoutSeconds: number
-}): Promise<InitAuthorResult> => {
-  const isolatedWorkspace = await createIsolatedWorkspace({
-    cwd
+}): Promise<{
+  exitCode: number
+  message: string
+  stderr: string
+  stdout: string
+}> => {
+  const result = await runCommand({
+    args: ['validate'],
+    command: 'bugscrub',
+    cwd: tempWorkspaceRoot,
+    env,
+    timeoutMs: timeoutSeconds * 1_000
   })
-  const renderer = createTranscriptRenderer()
-  let result: Awaited<ReturnType<typeof runCommand>> | undefined
-
-  try {
-    result = await runCommand({
-      args: ['exec', '--full-auto', '--skip-git-repo-check', prompt],
-      command: 'codex',
-      cwd: isolatedWorkspace.tempWorkspaceRoot,
-      env: isolatedWorkspace.env,
-      onStderr: (chunk) => {
-        renderer.pushStderr(chunk)
-      },
-      onStdout: (chunk) => {
-        renderer.pushStdout(chunk)
-      },
-      timeoutMs: timeoutSeconds * 1_000
-    })
-    renderer.flush()
-
-    if (result.exitCode !== 0) {
-      throw new CliError({
-        message: `Codex authoring failed with exit code ${result.exitCode}.\n${result.stderr.trim()}`,
-        exitCode: 1
-      })
-    }
-
-    await syncAuthoredWorkspace({
-      cwd,
-      tempWorkspaceRoot: isolatedWorkspace.tempWorkspaceRoot
-    })
-  } finally {
-    await isolatedWorkspace.cleanup()
-  }
-
-  if (!result) {
-    throw new CliError({
-      message: 'Codex authoring did not produce a result.',
-      exitCode: 1
-    })
-  }
-
-  const logPath = await writeAuthoringLog({
-    agent: 'codex',
-    cwd,
-    stderr: result.stderr,
-    stdout: result.stdout
-  })
+  const message = [result.stdout.trim(), result.stderr.trim()]
+    .filter((value) => value.length > 0)
+    .join('\n')
 
   return {
-    agent: 'codex',
-    logPath,
+    exitCode: result.exitCode,
+    message: message.length > 0 ? message : 'bugscrub validate exited without output.',
     stderr: result.stderr,
     stdout: result.stdout
   }
 }
 
-const runClaudeAuthoring = async ({
-  allowDangerousPermissions,
-  cwd,
-  maxBudgetUsd,
+const runAuthoringAttempt = async ({
+  agent,
   prompt,
+  sessionRoot,
+  tempWorkspaceRoot,
   timeoutSeconds
 }: {
-  allowDangerousPermissions: boolean | undefined
-  cwd: string
-  maxBudgetUsd: number
+  agent: InitAuthorAgent
   prompt: string
+  sessionRoot: string
+  tempWorkspaceRoot: string
   timeoutSeconds: number
 }): Promise<InitAuthorResult> => {
-  const isolatedWorkspace = await createIsolatedWorkspace({
-    cwd
-  })
   const renderer = createTranscriptRenderer()
-  let result: Awaited<ReturnType<typeof runCommand>> | undefined
+  const result = await runAgentInContainer({
+    agent,
+    cwd: tempWorkspaceRoot,
+    onStderr: (chunk) => {
+      renderer.pushStderr(chunk)
+    },
+    onStdout: (chunk) => {
+      renderer.pushStdout(chunk)
+    },
+    prompt,
+    sessionRoot,
+    timeoutMs: timeoutSeconds * 1_000
+  })
+  renderer.flush()
 
-  try {
-    result = await runCommand({
-      args: [
-        '--print',
-        '--output-format',
-        'text',
-        '--permission-mode',
-        allowDangerousPermissions ? 'bypassPermissions' : 'acceptEdits',
-        '--max-budget-usd',
-        String(maxBudgetUsd),
-        prompt
-      ],
-      command: 'claude',
-      cwd: isolatedWorkspace.tempWorkspaceRoot,
-      env: isolatedWorkspace.env,
-      onStderr: (chunk) => {
-        renderer.pushStderr(chunk)
-      },
-      onStdout: (chunk) => {
-        renderer.pushStdout(chunk)
-      },
-      timeoutMs: timeoutSeconds * 1_000
-    })
-    renderer.flush()
-
-    if (result.exitCode !== 0) {
-      throw new CliError({
-        message: `Claude authoring failed with exit code ${result.exitCode}.\n${result.stderr.trim()}`,
-        exitCode: 1
-      })
-    }
-
-    await syncAuthoredWorkspace({
-      cwd,
-      tempWorkspaceRoot: isolatedWorkspace.tempWorkspaceRoot
-    })
-  } finally {
-    await isolatedWorkspace.cleanup()
-  }
-
-  if (!result) {
+  if (result.exitCode !== 0) {
     throw new CliError({
-      message: 'Claude authoring did not produce a result.',
+      message: `${agent === 'codex' ? 'Codex' : 'Claude'} authoring failed with exit code ${result.exitCode}.\n${result.stderr.trim()}`,
       exitCode: 1
     })
   }
 
-  const logPath = await writeAuthoringLog({
-    agent: 'claude',
-    cwd,
-    stderr: result.stderr,
-    stdout: result.stdout
-  })
-
   return {
-    agent: 'claude',
-    logPath,
+    agent,
     stderr: result.stderr,
-    stdout: result.stdout
+    stdout: result.stdout,
+    logPath: ''
   }
 }
 
@@ -677,19 +475,99 @@ export const authorWorkspace = async ({
     `Running ${agent} in an isolated copy of the current directory. Full transcript will be written under .bugscrub/.`
   )
 
-  if (agent === 'codex') {
-    return runCodexAuthoring({
-      cwd,
-      prompt,
-      timeoutSeconds: config.agent.timeout
-    })
+  await ensureDockerRuntime()
+  const isolatedWorkspace = await createDisposableWorkspace({
+    agent,
+    cwd,
+    includeNodeModules: false,
+    includePackagedBugscrubCli: true
+  })
+  const aggregatedStdout: string[] = []
+  const aggregatedStderr: string[] = []
+  let currentPrompt = prompt
+
+  try {
+    for (let attempt = 1; attempt <= MAX_AUTHORING_VALIDATION_ATTEMPTS; attempt += 1) {
+      logger.info(
+        `Authoring attempt ${attempt}/${MAX_AUTHORING_VALIDATION_ATTEMPTS} in the isolated workspace.`
+      )
+
+      const attemptResult = await runAuthoringAttempt({
+        agent,
+        prompt: currentPrompt,
+        sessionRoot: isolatedWorkspace.sessionRoot,
+        tempWorkspaceRoot: isolatedWorkspace.tempWorkspaceRoot,
+        timeoutSeconds: config.agent.timeout
+      })
+
+      aggregatedStdout.push(
+        `## Authoring attempt ${attempt}\n${attemptResult.stdout.trim() || '(empty)'}`
+      )
+      aggregatedStderr.push(
+        `## Authoring attempt ${attempt}\n${attemptResult.stderr.trim() || '(empty)'}`
+      )
+
+      const validationResult = await validateAuthoredWorkspace({
+        env: isolatedWorkspace.hostEnv,
+        tempWorkspaceRoot: isolatedWorkspace.tempWorkspaceRoot,
+        timeoutSeconds: config.agent.timeout
+      })
+
+      aggregatedStdout.push(
+        `## Validation attempt ${attempt}\n${validationResult.stdout.trim() || '(empty)'}`
+      )
+      aggregatedStderr.push(
+        `## Validation attempt ${attempt}\n${validationResult.stderr.trim() || '(empty)'}`
+      )
+
+      if (validationResult.exitCode === 0) {
+        const authoredFiles = await syncAuthoredWorkspace({
+          cwd,
+          tempWorkspaceRoot: isolatedWorkspace.tempWorkspaceRoot
+        })
+
+        const logPath = await writeAuthoringLog({
+          agent,
+          cwd,
+          env: isolatedWorkspace.hostEnv,
+          stderr: aggregatedStderr.join('\n\n'),
+          stdout: aggregatedStdout.join('\n\n')
+        })
+
+        return {
+          agent,
+          authoredFiles,
+          logPath,
+          stderr: aggregatedStderr.join('\n\n'),
+          stdout: aggregatedStdout.join('\n\n')
+        }
+      }
+
+      if (attempt === MAX_AUTHORING_VALIDATION_ATTEMPTS) {
+        throw new CliError({
+          message: [
+            `Authoring produced invalid BugScrub files after ${MAX_AUTHORING_VALIDATION_ATTEMPTS} attempts.`,
+            validationResult.message
+          ].join('\n'),
+          exitCode: 1
+        })
+      }
+
+      logger.warn(
+        `Authoring attempt ${attempt} failed validation. Feeding the validation errors back to ${agent} for repair.`
+      )
+      currentPrompt = buildValidationFeedbackPrompt({
+        attempt,
+        basePrompt: prompt,
+        validationMessage: validationResult.message
+      })
+    }
+  } finally {
+    await isolatedWorkspace.cleanup()
   }
 
-  return runClaudeAuthoring({
-    allowDangerousPermissions: config.agent.allowDangerousPermissions,
-    cwd,
-    maxBudgetUsd: config.agent.maxBudgetUsd,
-    prompt,
-    timeoutSeconds: config.agent.timeout
+  throw new CliError({
+    message: 'Authoring did not produce a validated BugScrub workspace.',
+    exitCode: 1
   })
 }

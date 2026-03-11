@@ -138,6 +138,37 @@ describe('runInitCommand', () => {
     ).resolves.toBeUndefined()
   })
 
+  it('targets a pnpm workspace package via --filter semantics without prompting', async () => {
+    const repoPath = await createTempRepo({
+      fixtureName: 'pnpm-workspace'
+    })
+    const selectPackage = vi.fn(async ({ packages }: { packages: Array<{ relativePath: string }> }) => {
+      return packages[0] as never
+    })
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+
+    await runInitCommand({
+      authorRepo: noopAuthorRepo,
+      cwd: repoPath,
+      dryRun: false,
+      editor: undefined,
+      filter: 'apps/web',
+      selectPackage
+    })
+
+    expect(selectPackage).not.toHaveBeenCalled()
+    expect(
+      await pathExists({
+        path: join(repoPath, 'apps', 'web', '.bugscrub', 'bugscrub.config.yaml')
+      })
+    ).toBe(true)
+    expect(
+      await pathExists({
+        path: join(repoPath, 'apps', 'admin', '.bugscrub', 'bugscrub.config.yaml')
+      })
+    ).toBe(false)
+  })
+
   it('falls back to a minimal TODO scaffold when no framework is detected', async () => {
     const repoPath = await createTempRepo({
       fixtureName: 'no-framework'
@@ -194,7 +225,7 @@ describe('runInitCommand', () => {
     const repoPath = await createTempRepo({
       fixtureName: 'simple-nextjs'
     })
-    vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
 
     const authorRepo = vi.fn(async ({ cwd, prompt }: { cwd: string; prompt: string }) => {
       await Promise.all([
@@ -274,6 +305,13 @@ describe('runInitCommand', () => {
 
       return {
         agent: 'codex' as const,
+        authoredFiles: [
+          '.bugscrub/surfaces/settings/surface.yaml',
+          '.bugscrub/surfaces/settings/capabilities.yaml',
+          '.bugscrub/surfaces/settings/assertions.yaml',
+          '.bugscrub/surfaces/settings/signals.yaml',
+          '.bugscrub/workflows/settings-exploration.yaml'
+        ],
         logPath: join(cwd, '.bugscrub', 'authoring-codex.log'),
         stderr: '',
         stdout: 'authored'
@@ -294,6 +332,12 @@ describe('runInitCommand', () => {
       await pathExists({
         path: join(repoPath, '.bugscrub', 'workflows', 'settings-exploration.yaml')
       })
+    ).toBe(true)
+
+    expect(
+      writeSpy.mock.calls.some(([value]) =>
+        String(value).includes('Files written: 8.')
+      )
     ).toBe(true)
   })
 })

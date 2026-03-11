@@ -10,6 +10,7 @@ import type {
 } from '../../types/index.js'
 import type { ResolvedSurface } from '../../core/resolver.js'
 
+// AgentAdapter types define the stable contract between BugScrub and external runtimes.
 export type AgentName = 'claude' | 'codex'
 
 export type AgentCapabilities = {
@@ -70,12 +71,13 @@ export type RunArtifactPaths = {
   transcriptPath: string
 }
 
-export type RunContext = {
+export type BaseRunContext = {
   agent: {
     capabilities: AgentCapabilities
     name: AgentName
   }
   artifacts: RunArtifactPaths
+  containerSessionRoot?: string
   config: BugScrubConfig
   cwd: string
   environment: {
@@ -96,8 +98,11 @@ export type RunContext = {
   workflowPath: string
 }
 
+export type RunContext = BaseRunContext & {
+  prompt: string
+}
+
 export type AdapterRunArtifacts = {
-  raw: Record<string, unknown> | undefined
   stdout: string
   stderr: string
 }

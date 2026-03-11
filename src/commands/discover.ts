@@ -62,6 +62,7 @@ export const runDiscoverCommand = async ({
   authorRepo = authorWorkspace,
   cwd,
   dryRun,
+  filter,
   selectPackage = promptForPackageSelection
 }: {
   authorRepo?: (args: {
@@ -71,10 +72,12 @@ export const runDiscoverCommand = async ({
   }) => Promise<InitAuthorResult>
   cwd: string
   dryRun: boolean
+  filter?: string
   selectPackage?: (args: { packages: WorkspacePackage[] }) => Promise<WorkspacePackage>
 }): Promise<void> => {
   const { packageRoot, selectedPackage } = await selectWorkspacePackage({
     cwd,
+    ...(filter ? { filter } : {}),
     selectPackage
   })
   const bugscrubPath = `${packageRoot}/.bugscrub`
@@ -151,10 +154,13 @@ export const registerDiscoverCommand = (program: Command): void => {
     .command('discover')
     .description('Rescan an initialized repo and author missing surfaces or workflows.')
     .option('--dry-run', 'Print the authoring intent without writing files.')
-    .action(async (options: { dryRun?: boolean }) => {
+    .action(async (options: { dryRun?: boolean }, command: Command) => {
+      const globals = command.optsWithGlobals() as { filter?: string }
+
       await runDiscoverCommand({
         cwd: process.cwd(),
-        dryRun: options.dryRun ?? false
+        dryRun: options.dryRun ?? false,
+        ...(globals.filter ? { filter: globals.filter } : {})
       })
     })
 }

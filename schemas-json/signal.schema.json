@@ -1,7 +1,110 @@
 {
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "$ref": "#/definitions/signalSchema",
   "definitions": {
-    "signalSchema": {}
-  },
-  "$schema": "http://json-schema.org/draft-07/schema#"
+    "signalSchema": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "type": "string",
+              "const": "dom_change"
+            },
+            "target": {
+              "type": "object",
+              "properties": {
+                "test_id": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "test_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "name",
+            "description",
+            "kind",
+            "target"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "type": "string",
+              "const": "network_request"
+            },
+            "target": {
+              "type": "object",
+              "properties": {
+                "urlContains": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "urlContains"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "name",
+            "description",
+            "kind",
+            "target"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "type": "string",
+              "const": "url_change"
+            }
+          },
+          "required": [
+            "name",
+            "description",
+            "kind"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
 }

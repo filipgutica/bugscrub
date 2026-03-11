@@ -8,11 +8,19 @@ describe('buildCli', () => {
 
     expect(cli.commands.map((command) => command.name())).toEqual([
       'init',
+      'setup',
+      'setup-runtime',
       'discover',
       'validate',
       'generate',
       'run',
       'schema'
     ])
+  })
+
+  it('registers the global workspace filter option', () => {
+    const cli = buildCli()
+
+    expect(cli.options.some((option) => option.long === '--filter')).toBe(true)
   })
 })

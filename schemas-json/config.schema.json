@@ -1,7 +1,169 @@
 {
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "$ref": "#/definitions/configSchema",
   "definitions": {
-    "configSchema": {}
-  },
-  "$schema": "http://json-schema.org/draft-07/schema#"
+    "configSchema": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "0"
+        },
+        "project": {
+          "type": "string",
+          "minLength": 1
+        },
+        "defaultEnv": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "envs": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "baseUrl": {
+                "type": "string",
+                "format": "uri"
+              },
+              "defaultIdentity": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "identities": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9_-]+$"
+                },
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "auth": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "none"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "env"
+                            },
+                            "usernameEnvVar": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "passwordEnvVar": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "usernameEnvVar",
+                            "passwordEnvVar"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "token-env"
+                            },
+                            "tokenEnvVar": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "tokenEnvVar"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "auth"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "baseUrl",
+              "defaultIdentity",
+              "identities"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "agent": {
+          "type": "object",
+          "properties": {
+            "preferred": {
+              "default": "auto",
+              "type": "string",
+              "enum": [
+                "auto",
+                "claude",
+                "codex"
+              ]
+            },
+            "timeout": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "maxBudgetUsd": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "maxSteps": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "preferred",
+            "timeout",
+            "maxBudgetUsd"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "version",
+        "project",
+        "defaultEnv",
+        "envs",
+        "agent"
+      ],
+      "additionalProperties": false
+    }
+  }
 }

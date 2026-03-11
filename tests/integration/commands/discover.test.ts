@@ -164,4 +164,135 @@ describe('runDiscoverCommand', () => {
 
     expect(discoverHandoff).toContain('Existing surfaces: api_requests')
   })
+
+  it('targets a filtered pnpm workspace package without prompting', async () => {
+    const repoPath = await createTempRepo({
+      fixtureName: 'pnpm-workspace'
+    })
+    const adminRoot = join(repoPath, 'apps', 'admin')
+    await mkdir(join(adminRoot, '.bugscrub'), { recursive: true })
+    await writeFile(
+      join(adminRoot, '.bugscrub', 'bugscrub.config.yaml'),
+      [
+        'version: "0"',
+        'project: workspace-admin',
+        'defaultEnv: local',
+        'envs:',
+        '  local:',
+        '    baseUrl: http://localhost:4173',
+        '    defaultIdentity: user',
+        '    identities:',
+        '      user:',
+        '        auth:',
+        '          type: token-env',
+        '          tokenEnvVar: BUGSCRUB_TOKEN',
+        'agent:',
+        '  preferred: codex',
+        '  timeout: 300',
+        '  maxBudgetUsd: 5'
+      ].join('\n'),
+      'utf8'
+    )
+    const selectPackage = vi.fn(async () => {
+      throw new Error('workspace selection should not be prompted when --filter is used')
+    })
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+
+    const authorRepo = vi.fn(async ({ cwd }: { cwd: string; prompt: string }) => {
+      await Promise.all([
+        mkdir(join(cwd, '.bugscrub', 'surfaces', 'admin'), { recursive: true }),
+        mkdir(join(cwd, '.bugscrub', 'workflows'), { recursive: true })
+      ])
+
+      await Promise.all([
+        writeFile(
+          join(cwd, '.bugscrub', 'surfaces', 'admin', 'surface.yaml'),
+          [
+            'name: admin',
+            'routes:',
+            '  - /admin',
+            'elements:',
+            '  admin_page:',
+            '    test_id: admin-page',
+            'capabilities:',
+            '  - open_admin'
+          ].join('\n'),
+          'utf8'
+        ),
+        writeFile(
+          join(cwd, '.bugscrub', 'surfaces', 'admin', 'capabilities.yaml'),
+          [
+            '- name: open_admin',
+            '  description: Open the admin page.',
+            '  preconditions: []',
+            '  guidance:',
+            '    - Navigate to the admin page.',
+            '  success_signals: []',
+            '  failure_signals: []'
+          ].join('\n'),
+          'utf8'
+        ),
+        writeFile(
+          join(cwd, '.bugscrub', 'surfaces', 'admin', 'assertions.yaml'),
+          [
+            '- name: admin_page_visible',
+            '  kind: dom_presence',
+            '  description: The admin page is visible.',
+            '  match:',
+            '    test_id: admin-page'
+          ].join('\n'),
+          'utf8'
+        ),
+        writeFile(join(cwd, '.bugscrub', 'surfaces', 'admin', 'signals.yaml'), '[]\n', 'utf8'),
+        writeFile(
+          join(cwd, '.bugscrub', 'workflows', 'admin-exploration.yaml'),
+          [
+            'name: admin-exploration',
+            'target:',
+            '  surface: admin',
+            '  env: local',
+            'setup: []',
+            'exploration:',
+            '  tasks:',
+            '    - capability: open_admin',
+            '      min: 1',
+            '      max: 1',
+            'hard_assertions:',
+            '  - admin_page_visible',
+            'evidence:',
+            '  screenshots: true',
+            '  network_logs: false'
+          ].join('\n'),
+          'utf8'
+        )
+      ])
+
+      return {
+        agent: 'codex' as const,
+        logPath: join(cwd, '.bugscrub', 'authoring-codex.log'),
+        stderr: '',
+        stdout: 'discovered'
+      }
+    })
+
+    await runDiscoverCommand({
+      authorRepo,
+      cwd: repoPath,
+      dryRun: false,
+      filter: 'workspace-admin',
+      selectPackage
+    })
+
+    expect(selectPackage).not.toHaveBeenCalled()
+    expect(authorRepo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: adminRoot
+      })
+    )
+    expect(
+      await pathExists({
+        path: join(adminRoot, '.bugscrub', 'discover-report.md')
+      })
+    ).toBe(true)
+  })
 })

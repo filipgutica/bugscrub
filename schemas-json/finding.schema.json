@@ -1,7 +1,55 @@
 {
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "$ref": "#/definitions/findingSchema",
   "definitions": {
-    "findingSchema": {}
-  },
-  "$schema": "http://json-schema.org/draft-07/schema#"
+    "findingSchema": {
+      "type": "object",
+      "properties": {
+        "severity": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reproductionSteps": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "properties": {
+            "screenshot": {
+              "type": "string",
+              "minLength": 1
+            },
+            "networkLog": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "severity",
+        "title",
+        "description",
+        "reproductionSteps"
+      ],
+      "additionalProperties": false
+    }
+  }
 }

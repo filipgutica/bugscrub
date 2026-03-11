@@ -1,11 +1,11 @@
-import { cp, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { afterEach, describe, expect, it } from 'vitest'
-
 import { executeRun } from '../../../src/runner/index.js'
+import { CliError } from '../../../src/utils/errors.js'
 import type { AgentAdapter, AgentCapabilities, RunContext } from '../../../src/runner/agent/types.js'
 
 const fixturesDir = fileURLToPath(new URL('../../fixtures/repos/', import.meta.url))
@@ -13,6 +13,7 @@ const tempDirectories: string[] = []
 
 class FakeAdapter implements AgentAdapter {
   public readonly name = 'codex' as const
+  public lastPrompt: string | undefined
 
   public async detect(): Promise<boolean> {
     return true
@@ -37,11 +38,10 @@ class FakeAdapter implements AgentAdapter {
   }
 
   public async run(context: RunContext) {
+    this.lastPrompt = context.prompt
+
     return {
       artifacts: {
-        raw: {
-          adapter: 'fake'
-        },
         stderr: '',
         stdout: '{"event":"completed"}\n'
       },
@@ -59,9 +59,6 @@ class FakeAdapter implements AgentAdapter {
         evidence: {
           screenshots: [],
           networkLogs: []
-        },
-        raw: {
-          adapter: 'fake'
         }
       }
     }
@@ -71,6 +68,21 @@ class FakeAdapter implements AgentAdapter {
 class UndetectedAdapter extends FakeAdapter {
   public override async detect(): Promise<boolean> {
     return false
+  }
+}
+
+class FailingAdapter extends FakeAdapter {
+  public override async run(context: RunContext) {
+    await writeFile(
+      join(context.artifacts.debugDir, 'adapter-error.txt'),
+      'container-side failure details\n',
+      'utf8'
+    )
+
+    throw new CliError({
+      message: 'agent exploded',
+      exitCode: 1
+    })
   }
 }
 
@@ -104,7 +116,6 @@ describe('executeRun', () => {
       adapters: [new FakeAdapter()],
       cwd: repoPath,
       dryRun: true,
-      ensureBrowserRuntimeConfigured: async () => {},
       maxSteps: 7,
       workflow: 'api-requests-exploration'
     })
@@ -124,7 +135,6 @@ describe('executeRun', () => {
       adapters: [new UndetectedAdapter()],
       cwd: repoPath,
       dryRun: true,
-      ensureBrowserRuntimeConfigured: async () => {},
       maxSteps: 7,
       workflow: 'api-requests-exploration'
     })
@@ -137,12 +147,12 @@ describe('executeRun', () => {
     const repoPath = await createTempRepo({
       fixtureName: 'workspace-valid'
     })
+    const adapter = new FakeAdapter()
 
     const result = await executeRun({
-      adapters: [new FakeAdapter()],
+      adapters: [adapter],
       cwd: repoPath,
       dryRun: false,
-      ensureBrowserRuntimeConfigured: async () => {},
       maxSteps: undefined,
       workflow: 'api-requests-exploration'
     })
@@ -162,6 +172,82 @@ describe('executeRun', () => {
     const transcriptFile = join(debugRoot, (await readFile(result.reportPaths!.json, 'utf8')).match(/"runId": "([^"]+)"/)?.[1] ?? '', 'agent-transcript.jsonl')
 
     expect(await readFile(promptFile, 'utf8')).toContain('## Output format')
+    expect(await readFile(promptFile, 'utf8')).toContain('## Runtime preparation')
+    expect(await readFile(promptFile, 'utf8')).toContain('Verify that `https://staging.example.com` is reachable')
+    expect(await readFile(promptFile, 'utf8')).toBe(adapter.lastPrompt)
     expect(await readFile(transcriptFile, 'utf8')).toContain('completed')
   })
+
+  it('syncs .bugscrub debug artifacts back to the host when a live run fails', async () => {
+    const repoPath = await createTempRepo({
+      fixtureName: 'workspace-valid'
+    })
+
+    await expect(
+      executeRun({
+        adapters: [new FailingAdapter()],
+        cwd: repoPath,
+        dryRun: false,
+        maxSteps: undefined,
+        workflow: 'api-requests-exploration'
+      })
+    ).rejects.toMatchObject({
+      exitCode: 1,
+      message: 'agent exploded'
+    })
+
+    const debugRoot = join(repoPath, '.bugscrub', 'debug')
+    const debugRunDirectories = await readdir(debugRoot)
+
+    expect(debugRunDirectories).toHaveLength(1)
+    expect(
+      await readFile(join(debugRoot, debugRunDirectories[0]!, 'adapter-error.txt'), 'utf8')
+    ).toBe('container-side failure details\n')
+  })
+
+  it('tells the agent to return an empty assertionResults array when the workflow has no hard assertions', async () => {
+    const repoPath = await createTempRepo({
+      fixtureName: 'workspace-valid'
+    })
+    await writeFile(
+      join(repoPath, '.bugscrub', 'workflows', 'api-requests.yaml'),
+      [
+        'name: api-requests-exploration',
+        'target:',
+        '  surface: api_requests',
+        '  env: staging',
+        'requires:',
+        '  - browser.navigation',
+        '  - browser.dom.read',
+        '  - browser.network.observe',
+        'setup:',
+        '  - capability: login',
+        'exploration:',
+        '  tasks:',
+        '    - capability: inspect_requests_list',
+        '      min: 1',
+        '      max: 2',
+        'hard_assertions: []',
+        'evidence:',
+        '  screenshots: true',
+        '  network_logs: true',
+        ''
+      ].join('\n'),
+      'utf8'
+    )
+    const adapter = new FakeAdapter()
+
+    await executeRun({
+      adapters: [adapter],
+      cwd: repoPath,
+      dryRun: false,
+      maxSteps: undefined,
+      workflow: 'api-requests-exploration'
+    })
+
+    expect(adapter.lastPrompt).toContain('This workflow has no hard assertions.')
+    expect(adapter.lastPrompt).toContain('Set `assertionResults` to an empty array')
+    expect(adapter.lastPrompt).toContain('Do not put capability names, task names, or free-form checks into `assertionResults`.')
+  })
+
 })

@@ -1,7 +1,63 @@
 {
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "$ref": "#/definitions/capabilitySchema",
   "definitions": {
-    "capabilitySchema": {}
-  },
-  "$schema": "http://json-schema.org/draft-07/schema#"
+    "capabilitySchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "preconditions": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "guidance": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "success_signals": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        },
+        "failure_signals": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "preconditions",
+        "guidance",
+        "success_signals",
+        "failure_signals"
+      ],
+      "additionalProperties": false
+    }
+  }
 }

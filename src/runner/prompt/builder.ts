@@ -1,4 +1,4 @@
-import type { RunContext } from '../agent/types.js'
+import type { BaseRunContext, RunContext } from '../agent/types.js'
 import {
   authenticationSection,
   evidenceSection,
@@ -6,23 +6,25 @@ import {
   hardAssertionsSection,
   outputFormatSection,
   roleSection,
+  runtimePreparationSection,
   sessionSetupSection,
   targetSection
 } from './sections.js'
 import { serializePrompt } from './serializer.js'
 
-const buildPrompt = ({
+export const buildPrompt = ({
   context,
   adapterName
 }: {
   adapterName: 'claude' | 'codex'
-  context: RunContext
+  context: BaseRunContext
 }): string => {
   return serializePrompt({
     sections: [
       roleSection(),
       `Target runtime: \`${adapterName}\``,
       targetSection({ context }),
+      runtimePreparationSection({ context }),
       authenticationSection({ context }),
       sessionSetupSection({ context }),
       explorationSection({ context }),
@@ -33,24 +35,13 @@ const buildPrompt = ({
   })
 }
 
-export const buildClaudePrompt = ({
+export const buildPromptForContext = ({
   context
 }: {
-  context: RunContext
+  context: BaseRunContext | RunContext
 }): string => {
   return buildPrompt({
-    adapterName: 'claude',
-    context
-  })
-}
-
-export const buildCodexPrompt = ({
-  context
-}: {
-  context: RunContext
-}): string => {
-  return buildPrompt({
-    adapterName: 'codex',
+    adapterName: context.agent.name,
     context
   })
 }

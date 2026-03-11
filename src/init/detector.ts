@@ -4,6 +4,9 @@ import { join, relative, resolve } from 'node:path'
 
 import { parseYaml } from '../utils/yaml.js'
 
+// Init detection intentionally stays heuristic and dependency-light.
+// Its goal is to produce a useful starting scaffold, not a perfect model of the
+// repo, so warnings and TODOs are preferred over brittle inference.
 export type InitFramework =
   | 'next-app'
   | 'next-pages'
@@ -181,6 +184,8 @@ const isWorkspacePackageIncluded = ({
 
   let isIncluded = false
 
+  // pnpm patterns are order-sensitive: later negations or inclusions override
+  // earlier matches, so this mirrors that behavior instead of short-circuiting.
   for (const pattern of patterns) {
     const isNegated = pattern.startsWith('!')
     const normalizedPattern = isNegated ? pattern.slice(1) : pattern

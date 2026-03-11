@@ -32,7 +32,8 @@ export const getRepoPaths = ({ cwd }: { cwd: string }) => {
     configPath: join(bugscrubDir, 'bugscrub.config.yaml'),
     workflowsDir: join(bugscrubDir, 'workflows'),
     surfacesDir: join(bugscrubDir, 'surfaces'),
-    reportsDir: join(bugscrubDir, 'reports')
+    reportsDir: join(bugscrubDir, 'reports'),
+    debugDir: join(bugscrubDir, 'debug')
   }
 }
 

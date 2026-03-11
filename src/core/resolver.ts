@@ -5,9 +5,9 @@ import type {
   BugScrubConfig,
   CapabilityConfig,
   SignalConfig,
-  SurfaceConfig,
   WorkflowConfig
 } from '../types/index.js'
+import { ValidationError } from '../utils/errors.js'
 import type { SurfaceBundle } from './loader.js'
 
 type ValidationIssue = {
@@ -15,7 +15,7 @@ type ValidationIssue = {
   message: string
 }
 
-type ResolvedSurface = SurfaceBundle & {
+export type ResolvedSurface = SurfaceBundle & {
   capabilityMap: Map<string, CapabilityConfig>
   assertionMap: Map<string, AssertionConfig>
   signalMap: Map<string, SignalConfig>
@@ -37,7 +37,7 @@ const pushIssue = ({
   issues.push({ path, message })
 }
 
-const buildResolvedSurface = ({
+export const buildResolvedSurface = ({
   bundle,
   issues
 }: {
@@ -279,4 +279,30 @@ export const validateWorkspaceDefinition = ({
   return {
     issues
   }
+}
+
+export const resolveWorkspaceDefinition = ({
+  surfaces
+}: {
+  surfaces: SurfaceBundle[]
+}): Map<string, ResolvedSurface> => {
+  const issues: ValidationIssue[] = []
+  const surfaceMap = new Map<string, ResolvedSurface>()
+
+  for (const bundle of surfaces) {
+    const resolved = buildResolvedSurface({
+      bundle,
+      issues
+    })
+    surfaceMap.set(resolved.surface.name, resolved)
+  }
+
+  if (issues.length > 0) {
+    throw new ValidationError({
+      message: 'Cannot resolve workspace definition because it is invalid.',
+      details: issues.map(({ path, message }) => `${path}: ${message}`)
+    })
+  }
+
+  return surfaceMap
 }

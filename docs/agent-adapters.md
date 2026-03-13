@@ -21,7 +21,8 @@ The adapter should assume `context.prompt` is already final. It should not rebui
 4. Enforce the same dangerous-permissions policy as existing adapters.
 5. Reuse `runCommand()` for subprocess execution unless there is a strong reason not to.
 6. Return a normalized `AdapterRunOutput` with raw stdout/stderr artifacts preserved.
-7. Register the adapter in runtime selection code and tests.
+7. Implement `repairOutput(...)` if the runtime can return corrected structured output without rerunning the workflow.
+8. Register the adapter in runtime selection code and tests.
 
 ## Capability Rules
 
@@ -35,12 +36,14 @@ The adapter should assume `context.prompt` is already final. It should not rebui
 - Prefer explicit env allowlists and redact sensitive values from stored transcripts/logs.
 - Prefer the least-permissive runtime mode that still lets the adapter inspect the repo and produce its structured result.
 - Do not bypass sandbox or permission checks by default.
+- Treat browser MCP setup and Chromium preflight as runtime-layer concerns. Adapters should assume the container runtime has already prepared that environment.
 
 ## Test Expectations
 
 - Unit test `detect()` and `getCapabilities()`.
 - Unit test the dangerous-permissions gate.
 - Integration test that the adapter receives the same prebuilt prompt that BugScrub writes to artifacts.
+- Test repair-only structured-output behavior if the adapter supports `repairOutput(...)`.
 - Add or update negotiation coverage if capability handling changes.
 
 ## Future Adapter TODOs

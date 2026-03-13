@@ -4,6 +4,31 @@ import { runResultSchema } from '../../schemas/run-result.schema.js'
 import type { RunResult } from '../../types/index.js'
 import { CliError } from '../../utils/errors.js'
 
+export class InvalidRunResultError extends CliError {
+  public readonly agent: 'claude' | 'codex'
+  public readonly issues: string[]
+  public readonly rawOutput: string
+
+  public constructor({
+    agent,
+    issues,
+    rawOutput
+  }: {
+    agent: 'claude' | 'codex'
+    issues: string[]
+    rawOutput: string
+  }) {
+    super({
+      message: [`Invalid ${agent} run result output.`, ...issues].join('\n'),
+      exitCode: 1
+    })
+    this.agent = agent
+    this.issues = issues
+    this.name = 'InvalidRunResultError'
+    this.rawOutput = rawOutput
+  }
+}
+
 const stripNullOptionals = ({ value }: { value: unknown }): unknown => {
   if (Array.isArray(value)) {
     return value.map((item) =>
@@ -56,9 +81,10 @@ export const parseRunResultOutput = ({
           ? error.message
           : 'Unknown parse failure.'
 
-    throw new CliError({
-      message: `Invalid ${agent} run result output.\n${detail}`,
-      exitCode: 1
+    throw new InvalidRunResultError({
+      agent,
+      issues: [detail],
+      rawOutput: output
     })
   }
 }

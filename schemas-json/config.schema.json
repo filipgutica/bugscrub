@@ -111,6 +111,42 @@
                   ],
                   "additionalProperties": false
                 }
+              },
+              "localRuntime": {
+                "type": "object",
+                "properties": {
+                  "cwd": {
+                    "default": ".",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "installCommand": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "readyPath": {
+                    "default": "/",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "readyTimeoutMs": {
+                    "default": 120000,
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "startCommand": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "cwd",
+                  "readyPath",
+                  "readyTimeoutMs",
+                  "startCommand"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [

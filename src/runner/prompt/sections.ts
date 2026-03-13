@@ -6,6 +6,7 @@ import type {
   ResolvedIdentity,
   ResolvedTaskStep
 } from '../agent/types.js'
+import { buildRuntimeProbeUrl, isLocalBaseUrl } from '../local-runtime.js'
 
 const formatIdentity = ({
   identity
@@ -92,20 +93,6 @@ const formatAssertion = ({
   return `- \`${assertion.namespacedName}\`: ${assertion.description} (${assertion.kind}; ${matcher})`
 }
 
-const isLocalBaseUrl = ({
-  baseUrl
-}: {
-  baseUrl: string
-}): boolean => {
-  try {
-    const parsed = new URL(baseUrl)
-
-    return parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1'
-  } catch {
-    return false
-  }
-}
-
 export const roleSection = (): string => {
   return [
     '## Role framing',
@@ -150,10 +137,21 @@ export const runtimePreparationSection = ({
   const lines = ['## Runtime preparation']
 
   if (isLocalBaseUrl({ baseUrl: context.environment.baseUrl })) {
-    lines.push(
-      `- Before opening the browser, verify that \`${context.environment.baseUrl}\` is reachable.`,
-      '- If the local app is unavailable, stop and report that the repo dev server is not running instead of continuing blindly.'
-    )
+    if (context.environment.localRuntime) {
+      lines.push(
+        `- BugScrub starts the configured local runtime in-container before exploration and waits for \`${buildRuntimeProbeUrl({
+          baseUrl: context.environment.baseUrl,
+          readyPath: context.environment.localRuntime.readyPath
+        })}\` to become reachable.`,
+        `- BugScrub already verified that \`${context.environment.baseUrl}\` is reachable in the runtime container. Start exploration from that URL instead of re-checking it with separate shell probes.`,
+        '- If the local app later becomes unavailable, stop and report the runtime failure with the captured startup logs.'
+      )
+    } else {
+      lines.push(
+        `- Before opening the browser, verify that \`${context.environment.baseUrl}\` is reachable.`,
+        '- If the local app is unavailable, stop and report that the repo dev server is not running instead of continuing blindly.'
+      )
+    }
   } else {
     lines.push(
       `- Verify that \`${context.environment.baseUrl}\` is reachable before spending time on browser exploration.`,

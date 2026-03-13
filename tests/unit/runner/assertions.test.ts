@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { validateAssertionCoverage } from '../../../src/runner/assertions.js'
+import { repairAssertionCoverage, validateAssertionCoverage } from '../../../src/runner/assertions.js'
 
 describe('validateAssertionCoverage', () => {
   const assertions = [
@@ -84,6 +84,54 @@ describe('validateAssertionCoverage', () => {
     ).toEqual([
       'Unexpected assertion result "unexpected".',
       'Missing assertion result "requests_visible".'
+    ])
+  })
+
+  it('repairs incomplete assertion coverage into a reportable result set', () => {
+    const repaired = repairAssertionCoverage({
+      assertions,
+      results: [
+        {
+          assertion: 'page_not_blank',
+          status: 'passed',
+          summary: 'Visible.'
+        },
+        {
+          assertion: 'unexpected',
+          status: 'failed',
+          summary: 'Unexpected.'
+        }
+      ]
+    })
+
+    expect(repaired.validation.issues).toEqual([
+      'Unexpected assertion result "unexpected".',
+      'Missing assertion result "requests_visible".'
+    ])
+    expect(repaired.results).toEqual([
+      {
+        assertion: 'page_not_blank',
+        status: 'passed',
+        summary: 'Visible.'
+      },
+      {
+        assertion: 'requests_visible',
+        status: 'not_evaluated',
+        summary:
+          'BugScrub inserted this result because the agent returned an incomplete assertionResults payload for "requests_visible".'
+      }
+    ])
+    expect(repaired.findings).toEqual([
+      {
+        severity: 'medium',
+        title: 'BugScrub repaired an incomplete assertionResults payload',
+        description:
+          'The agent finished execution, but BugScrub had to normalize assertion coverage before writing the final report.',
+        reproductionSteps: [
+          'Missing assertion results were marked as not_evaluated: requests_visible.',
+          'Unexpected assertion identifiers were dropped: unexpected.'
+        ]
+      }
     ])
   })
 })

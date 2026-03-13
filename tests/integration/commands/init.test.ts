@@ -101,10 +101,18 @@ describe('runInitCommand', () => {
       join(repoPath, '.bugscrub', 'agent-handoff.md'),
       'utf8'
     )
+    const configSource = await readFile(
+      join(repoPath, '.bugscrub', 'bugscrub.config.yaml'),
+      'utf8'
+    )
 
     expect(reportSource).toContain('Surface and workflow YAML files were intentionally left for the agent to author.')
+    expect(reportSource).toContain('`localRuntime` was inferred')
     expect(reportSource).toContain('app/page.tsx')
     expect(handoffSource).toContain('Create repo-specific surfaces under `.bugscrub/surfaces/<surface>/`.')
+    expect(configSource).toContain('localRuntime:')
+    expect(configSource).toContain('installCommand: npm install')
+    expect(configSource).toContain('startCommand: npm run dev -- --hostname 127.0.0.1 --port 3000')
   })
 
   it('selects a pnpm workspace package before writing scaffold files', async () => {
@@ -132,6 +140,14 @@ describe('runInitCommand', () => {
         path: join(repoPath, '.bugscrub', 'bugscrub.config.yaml')
       })
     ).toBe(false)
+
+    const configSource = await readFile(
+      join(repoPath, 'apps', 'admin', '.bugscrub', 'bugscrub.config.yaml'),
+      'utf8'
+    )
+
+    expect(configSource).toContain('installCommand: pnpm install --frozen-lockfile')
+    expect(configSource).toContain('startCommand: pnpm dev --host 127.0.0.1 --port 5173')
 
     await expect(
       runValidateCommand({ cwd: join(repoPath, 'apps', 'admin') })
@@ -199,8 +215,52 @@ describe('runInitCommand', () => {
     )
 
     expect(configSource).toContain('https://example.com')
+    expect(configSource).not.toContain('localRuntime:')
     expect(reportSource).toContain('placeholder')
+    expect(reportSource).toContain('`localRuntime` was omitted')
     expect(handoffSource).toContain('Replace placeholder values in `.bugscrub/bugscrub.config.yaml` where needed.')
+  })
+
+  it('supports --skip-scan style init without invoking the authoring agent', async () => {
+    const repoPath = await createTempRepo({
+      fixtureName: 'simple-nextjs'
+    })
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+
+    await runInitCommand({
+      authorRepo: noopAuthorRepo,
+      cwd: repoPath,
+      dryRun: false,
+      editor: undefined,
+      skipScan: true,
+      selectPackage: async ({ packages }) => packages[0]!
+    })
+
+    expect(noopAuthorRepo).not.toHaveBeenCalled()
+    await expect(runValidateCommand({ cwd: repoPath })).resolves.toBeUndefined()
+    expect(
+      await pathExists({
+        path: join(repoPath, '.bugscrub', 'agent-handoff.md')
+      })
+    ).toBe(true)
+    expect(
+      await pathExists({
+        path: join(repoPath, '.bugscrub', 'workflows', 'settings-exploration.yaml')
+      })
+    ).toBe(false)
+
+    const reportSource = await readFile(
+      join(repoPath, '.bugscrub', 'init-report.md'),
+      'utf8'
+    )
+
+    expect(reportSource).toContain('left for a later `discover` or `generate` pass')
+    expect(reportSource).toContain('Run `bugscrub discover`')
+    expect(
+      writeSpy.mock.calls.some(([value]) =>
+        String(value).includes('Scaffold: config, report, and agent handoff only.')
+      )
+    ).toBe(true)
   })
 
   it('fails when init is run against an already initialized repo', async () => {

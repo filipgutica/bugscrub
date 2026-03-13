@@ -39,6 +39,8 @@ BugScrub owns the workflow semantics, schema validation, capability resolution, 
 
 Agent-invoking flows run inside a disposable Docker workspace. BugScrub only syncs `.bugscrub/**` back to the host repo after those runs.
 
+`init`, `discover`, and live `run` share the same container/runtime substrate. The architecture doc describes the command state machines, and the codebase guide explains the runtime modules and call paths in detail.
+
 ## Where It Fits
 
 BugScrub complements existing testing rather than replacing it.
@@ -181,6 +183,8 @@ Route generation reuses an existing surface when `.bugscrub/surfaces/*/surface.y
 
 During `init`, BugScrub seeds `local.baseUrl` from the detected framework defaults, and the authoring agent may refine it for the repo. `run` uses the configured target URL directly, so if the inferred local URL is wrong you can update it in `.bugscrub/bugscrub.config.yaml`.
 
+If a local environment should be started by BugScrub instead of by the user, add an optional `localRuntime` block under that environment with `cwd`, `startCommand`, and optional `installCommand`, `readyPath`, and `readyTimeoutMs`. For live container-backed runs, BugScrub starts that command inside the shared session container and waits for the readiness URL before handing control to the agent.
+
 For container auth, BugScrub supports two sources for the selected agent:
 
 - API-key env vars forwarded into the container
@@ -221,6 +225,7 @@ The immediate goal is a small, disciplined CLI with strict schemas, repo-local c
 
 ## Docs
 
+- [Codebase guide](/Users/filip.gutica@konghq.com/code/bugscrub/docs/codebase-guide.md)
 - [Architecture](/Users/filip.gutica@konghq.com/code/bugscrub/docs/architecture.md)
 - [AgentAdapter guide](/Users/filip.gutica@konghq.com/code/bugscrub/docs/agent-adapters.md)
 - [Source layout](/Users/filip.gutica@konghq.com/code/bugscrub/docs/source-layout.md)

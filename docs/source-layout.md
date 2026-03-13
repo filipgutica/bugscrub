@@ -18,6 +18,17 @@ Workflow draft generation from a single source of truth. Keep these modules dete
 
 Bootstrap, repo scanning, authoring handoff generation, and monorepo package targeting. This is where interactive workspace selection and authoring-agent orchestration live.
 
+## `src/agent-runtime`
+
+Container/runtime plumbing shared by `init`, `discover`, and live `run`.
+
+- `container.ts`: stable facade used by the rest of the codebase
+- `workspace.ts`: disposable workspace creation and `.bugscrub/` sync-back
+- `auth.ts`: auth detection, env filtering, and staged agent homes
+- `docker.ts`: Docker command construction and session lifecycle
+- `local-runtime.ts`: in-container dev-server startup and readiness checks
+- `browser.ts`: chrome-devtools MCP setup and Chromium preflight
+
 ## `src/reporter`
 
 Final report rendering. Keep report formatting separate from runtime execution.
@@ -25,6 +36,11 @@ Final report rendering. Keep report formatting separate from runtime execution.
 ## `src/runner`
 
 Execution semantics for `bugscrub run`: capability negotiation, prompt building, diagnostics, adapter invocation, and result normalization.
+
+- `index.ts`: top-level state machine
+- `context.ts`: workflow selection and `RunContext` construction
+- `output-repair.ts`: structured-output retry loops
+- `result-mapping.ts`: host-path remapping and report shaping
 
 ## `src/schemas`
 

@@ -1,6 +1,8 @@
+import { join } from 'node:path'
 import { detectAvailableContainerAgents, runAgentInContainer } from '../../agent-runtime/container.js'
 import { CliError } from '../../utils/errors.js'
-import type { AdapterRunOutput, AgentAdapter, AgentCapabilities, RunContext } from './types.js'
+import { buildOutputRepairPrompt } from './repair.js'
+import type { AdapterRunOutput, AgentAdapter, AgentCapabilities, RepairOutputInput, RunContext } from './types.js'
 import { parseRunResultOutput } from './result.js'
 
 const claudeCapabilities: AgentCapabilities = {
@@ -21,6 +23,7 @@ const claudeCapabilities: AgentCapabilities = {
 
 export class ClaudeAdapter implements AgentAdapter {
   public readonly name = 'claude' as const
+  public readonly requiresContainer = true
 
   public async detect(): Promise<boolean> {
     const available = await detectAvailableContainerAgents()
@@ -31,7 +34,15 @@ export class ClaudeAdapter implements AgentAdapter {
     return claudeCapabilities
   }
 
-  public async run(context: RunContext): Promise<AdapterRunOutput> {
+  private async execute({
+    context,
+    prompt,
+    requireBrowserPreflight
+  }: {
+    context: RunContext
+    prompt: string
+    requireBrowserPreflight: boolean
+  }): Promise<AdapterRunOutput> {
     if (!context.containerSessionRoot) {
       throw new CliError({
         message: 'Claude runs now require a container session root.',
@@ -41,9 +52,16 @@ export class ClaudeAdapter implements AgentAdapter {
 
     const command = await runAgentInContainer({
       agent: 'claude',
+      browserPreflightLogPath: join(context.artifacts.debugDir, 'chrome-devtools-preflight.log'),
       cwd: context.cwd,
-      prompt: context.prompt,
+      prompt,
+      requireBrowserPreflight,
       schemaPath: context.artifacts.responseSchemaPath,
+      ...(context.containerSessionName
+        ? {
+            containerName: context.containerSessionName
+          }
+        : {}),
       sessionRoot: context.containerSessionRoot,
       timeoutMs: context.timeoutSeconds * 1_000
     })
@@ -66,7 +84,31 @@ export class ClaudeAdapter implements AgentAdapter {
         stderr: command.stderr,
         stdout: command.stdout
       },
+      rawResponse: trimmed,
       result
     }
+  }
+
+  public async run(context: RunContext): Promise<AdapterRunOutput> {
+    return this.execute({
+      context,
+      prompt: context.prompt,
+      requireBrowserPreflight: true
+    })
+  }
+
+  public async repairOutput(
+    context: RunContext,
+    input: RepairOutputInput
+  ): Promise<AdapterRunOutput> {
+    return this.execute({
+      context,
+      prompt: buildOutputRepairPrompt({
+        agent: this.name,
+        context,
+        input
+      }),
+      requireBrowserPreflight: false
+    })
   }
 }

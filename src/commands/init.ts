@@ -19,10 +19,11 @@ export const runInitCommand = async ({
   dryRun,
   editor,
   filter,
+  skipScan = false,
   selectPackage = promptForPackageSelection
 }: {
   authorRepo?: (args: {
-    config: ReturnType<typeof buildInitConfig>['config']
+    config: Awaited<ReturnType<typeof buildInitConfig>>['config']
     cwd: string
     prompt: string
   }) => Promise<InitAuthorResult>
@@ -30,6 +31,7 @@ export const runInitCommand = async ({
   dryRun: boolean
   editor: 'vscode' | undefined
   filter?: string
+  skipScan?: boolean
   selectPackage?: (args: { packages: WorkspacePackage[] }) => Promise<WorkspacePackage>
 }): Promise<void> => {
   const { packageRoot, selectedPackage } = await selectWorkspacePackage({
@@ -54,7 +56,7 @@ export const runInitCommand = async ({
     detection,
     root: packageRoot
   })
-  const { config, usesPlaceholderBaseUrl } = buildInitConfig({
+  const { config, usesPlaceholderBaseUrl } = await buildInitConfig({
     framework: detection.framework,
     packageName: detection.packageJsonName,
     packageRoot
@@ -77,6 +79,7 @@ export const runInitCommand = async ({
     framework: detection.framework,
     packageRoot,
     selectedPackage,
+    skipScan,
     testRunners: detection.testRunners,
     usesPlaceholderBaseUrl,
     writtenDirectories: ['.bugscrub', '.bugscrub/workflows', '.bugscrub/surfaces', '.bugscrub/reports'],
@@ -101,7 +104,7 @@ export const runInitCommand = async ({
   })
   let authorResult: InitAuthorResult | undefined
 
-  if (!dryRun) {
+  if (!dryRun && !skipScan) {
     logger.info('Invoking the selected agent to author repo-specific surfaces and workflows.')
     authorResult = await authorRepo({
       config,
@@ -114,7 +117,7 @@ export const runInitCommand = async ({
 
   process.stdout.write(
     `${renderInitStdoutSummary({
-      author: true,
+      author: !skipScan,
       authorAgent: authorResult?.agent,
       dryRun,
       selectedPackage,
@@ -134,6 +137,7 @@ export const registerInitCommand = (program: Command): void => {
     .command('init')
     .description('Scaffold a .bugscrub directory and invoke an authoring agent.')
     .option('--dry-run', 'Print planned changes without writing files.')
+    .option('--skip-scan', 'Write only the deterministic scaffold and skip agent authoring.')
     .option(
       '--editor <editor>',
       'Write optional editor integration settings.',
@@ -148,14 +152,20 @@ export const registerInitCommand = (program: Command): void => {
         return value as 'vscode'
       }
     )
-    .action(async (options: { dryRun?: boolean; editor?: 'vscode' }, command: Command) => {
+    .action(
+      async (
+        options: { dryRun?: boolean; editor?: 'vscode'; skipScan?: boolean },
+        command: Command
+      ) => {
       const globals = command.optsWithGlobals() as { filter?: string }
 
       await runInitCommand({
         cwd: process.cwd(),
         dryRun: options.dryRun ?? false,
         editor: options.editor,
+        skipScan: options.skipScan ?? false,
         ...(globals.filter ? { filter: globals.filter } : {})
       })
-    })
+      }
+    )
 }

@@ -78,12 +78,14 @@ export type BaseRunContext = {
   }
   artifacts: RunArtifactPaths
   containerSessionRoot?: string
+  containerSessionName?: string
   config: BugScrubConfig
   cwd: string
   environment: {
     baseUrl: string
     defaultIdentity: ResolvedIdentity
     identities: ResolvedIdentity[]
+    localRuntime?: BugScrubConfig['envs'][string]['localRuntime']
     name: string
   }
   hardAssertions: ResolvedAssertion[]
@@ -109,13 +111,22 @@ export type AdapterRunArtifacts = {
 
 export type AdapterRunOutput = {
   artifacts: AdapterRunArtifacts
+  rawResponse: string
   result: RunResult
+}
+
+export type RepairOutputInput = {
+  attempt: number
+  issues: string[]
+  previousOutput: string
 }
 
 export interface AgentAdapter {
   detect(): Promise<boolean>
   getCapabilities(): Promise<AgentCapabilities>
   readonly name: AgentName
+  readonly requiresContainer?: boolean
+  repairOutput?(context: RunContext, input: RepairOutputInput): Promise<AdapterRunOutput>
   run(context: RunContext): Promise<AdapterRunOutput>
 }
 

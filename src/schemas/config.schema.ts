@@ -21,10 +21,19 @@ const identitySchema = z.object({
   auth: authConfigSchema
 })
 
+const localRuntimeSchema = z.object({
+  cwd: nonEmptyStringSchema.default('.'),
+  installCommand: nonEmptyStringSchema.optional(),
+  readyPath: nonEmptyStringSchema.default('/'),
+  readyTimeoutMs: z.number().int().positive().default(120_000),
+  startCommand: nonEmptyStringSchema
+})
+
 const environmentSchema = z.object({
   baseUrl: z.string().url(),
   defaultIdentity: nameSchema,
-  identities: z.record(nameSchema, identitySchema)
+  identities: z.record(nameSchema, identitySchema),
+  localRuntime: localRuntimeSchema.optional()
 })
 
 export const bugScrubConfigSchema = z

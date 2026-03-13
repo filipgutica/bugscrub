@@ -158,8 +158,10 @@ describe('ClaudeAdapter', () => {
 
     expect(mockRunAgentInContainer).toHaveBeenCalledWith({
       agent: 'claude',
+      browserPreflightLogPath: '/tmp/debug/chrome-devtools-preflight.log',
       cwd: '/tmp',
       prompt: 'prompt',
+      requireBrowserPreflight: true,
       schemaPath: '/tmp/schema.json',
       sessionRoot: '/tmp/session',
       timeoutMs: 30_000

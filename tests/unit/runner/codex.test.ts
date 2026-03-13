@@ -207,9 +207,11 @@ describe('CodexAdapter', () => {
 
     expect(mockRunAgentInContainer).toHaveBeenCalledWith({
       agent: 'codex',
+      browserPreflightLogPath: join(root, 'debug', 'chrome-devtools-preflight.log'),
       cwd: root,
       onStdout: expect.any(Function),
       prompt: 'prompt',
+      requireBrowserPreflight: true,
       schemaPath: join(root, 'schema.json'),
       sessionRoot: join(root, 'session'),
       timeoutMs: 30_000
@@ -233,6 +235,7 @@ describe('CodexAdapter', () => {
       stderr: 'fatal: codex backend error\n',
       stdout: '{"event":"failed"}\n'
     })
+    mockReadCodexLastMessage.mockRejectedValue(new Error('ENOENT: no such file or directory'))
 
     const adapter = new CodexAdapter()
 
@@ -261,5 +264,46 @@ describe('CodexAdapter', () => {
         join(root, 'debug', 'codex-last-message.json')
       )
     }
+  })
+
+  it('recovers the report from codex-last-message.json when Codex exits non-zero after writing it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugscrub-codex-test-'))
+    tempDirectories.push(root)
+    await mkdir(join(root, 'debug'), { recursive: true })
+    await writeFile(join(root, 'schema.json'), '{}\n', 'utf8')
+
+    mockRunAgentInContainer.mockResolvedValue({
+      exitCode: -1,
+      stderr: 'context canceled\n',
+      stdout: '{"type":"item.completed"}\n'
+    })
+    mockReadCodexLastMessage.mockResolvedValue(
+      JSON.stringify({
+        status: 'error',
+        startedAt: '2026-03-13T17:26:39.000Z',
+        completedAt: '2026-03-13T17:31:17.000Z',
+        durationMs: 278000,
+        findings: [],
+        assertionResults: [],
+        evidence: {
+          screenshots: [],
+          networkLogs: []
+        }
+      })
+    )
+
+    const loggerWarnSpy = vi.spyOn(logger, 'warn')
+    const adapter = new CodexAdapter()
+
+    const result = await adapter.run(
+      createRunContext({
+        root
+      })
+    )
+
+    expect(result.result.status).toBe('error')
+    expect(loggerWarnSpy).toHaveBeenCalledWith(
+      `Codex exited with code -1, but BugScrub recovered the structured run result from ${join(root, 'debug')}/codex-last-message.json.`
+    )
   })
 })

@@ -8,6 +8,7 @@ export type InitSummaryContext = {
   framework: InitFramework
   packageRoot: string
   selectedPackage: WorkspacePackage | undefined
+  skipScan: boolean
   testRunners: InitTestRunner[]
   usesPlaceholderBaseUrl: boolean
   writtenDirectories: string[]
@@ -35,6 +36,7 @@ export const renderInitReport = ({
   framework,
   packageRoot,
   selectedPackage,
+  skipScan,
   testRunners,
   usesPlaceholderBaseUrl,
   writtenDirectories,
@@ -57,10 +59,15 @@ export const renderInitReport = ({
     '',
     '## Bootstrap Result',
     '- BugScrub wrote a minimal validated scaffold only.',
-    '- Surface and workflow YAML files were intentionally left for the agent to author.',
+    skipScan
+      ? '- Surface and workflow YAML files were intentionally left for a later `discover` or `generate` pass.'
+      : '- Surface and workflow YAML files were intentionally left for the agent to author.',
     usesPlaceholderBaseUrl
       ? '- `local.baseUrl` is a placeholder and must be replaced before running workflows.'
       : '- `local.baseUrl` was inferred from the detected framework and can be edited if this repo uses a different local dev URL.',
+    framework === 'unknown'
+      ? '- `localRuntime` was omitted because BugScrub could not infer a safe app startup command for this repo.'
+      : '- `localRuntime` was inferred from the detected framework and package manager and can be refined if this repo starts differently.',
     ''
   ]
 
@@ -85,8 +92,12 @@ export const renderInitReport = ({
 
   lines.push(
     '## Next Step',
-    '- Ask an agent to inspect this package and author `.bugscrub/surfaces/*` and `.bugscrub/workflows/*.yaml`.',
-    '- Re-run `bugscrub validate` after the agent fills in the repo-specific files.',
+    skipScan
+      ? '- Run `bugscrub discover` for agent-authored surfaces/workflows, or `bugscrub generate` to draft workflows from local evidence.'
+      : '- Ask an agent to inspect this package and author `.bugscrub/surfaces/*` and `.bugscrub/workflows/*.yaml`.',
+    skipScan
+      ? '- Re-run `bugscrub validate` after repo-specific surfaces and workflows are added.'
+      : '- Re-run `bugscrub validate` after the agent fills in the repo-specific files.',
     ''
   )
 

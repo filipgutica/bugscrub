@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { join } from 'node:path'
 
 import chalk from 'chalk'
 
@@ -29,86 +29,11 @@ export type InitAuthorResult = {
   stdout: string
 }
 
-type AuthoringWorkspaceConfig = BugScrubConfig & {
-  agent: BugScrubConfig['agent'] & {
-    preferred: InitAuthorAgent
-  }
-}
-
-const AUTHORING_STRIPPED_ENV_VARS = [
-  'NODE_INSPECT_RESUME_ON_START',
-  'NODE_OPTIONS',
-  'VSCODE_INSPECTOR_OPTIONS'
-] as const
-
-const AUTHORING_ALLOWED_ENV_KEYS = new Set([
-  'APPDATA',
-  'CI',
-  'COLORTERM',
-  'COMSPEC',
-  'FORCE_COLOR',
-  'HOME',
-  'HOMEDRIVE',
-  'HOMEPATH',
-  'HTTPS_PROXY',
-  'HTTP_PROXY',
-  'LANG',
-  'LC_ALL',
-  'LC_CTYPE',
-  'LOCALAPPDATA',
-  'LOGNAME',
-  'NO_COLOR',
-  'NO_PROXY',
-  'PATH',
-  'SHELL',
-  'SystemRoot',
-  'TEMP',
-  'TERM',
-  'TMP',
-  'TMPDIR',
-  'USER',
-  'USERNAME',
-  'USERPROFILE',
-  'XDG_CACHE_HOME',
-  'XDG_CONFIG_HOME',
-  'XDG_STATE_HOME'
-])
-
-const AUTHORING_ALLOWED_ENV_PREFIXES = [
-  'ANTHROPIC_',
-  'AWS_',
-  'CLAUDE_CODE_',
-  'CODEX_',
-  'OPENAI_'
-] as const
-
 const AUTHORING_SENSITIVE_ENV_PATTERNS = [
   /TOKEN/i,
   /SECRET/i,
   /PASSWORD/i,
   /KEY/i
-] as const
-
-const AUTHORING_EXCLUDED_NAMES = new Set([
-  '.aws',
-  '.env',
-  '.git',
-  '.gnupg',
-  '.npmrc',
-  '.pnpmrc',
-  '.ssh',
-  '.terraform',
-  '.yarnrc',
-  '.yarnrc.yml',
-  'id_ed25519',
-  'id_rsa',
-  'node_modules'
-])
-
-const AUTHORING_EXCLUDED_PATTERNS = [
-  /^\.env\./i,
-  /^service-account.*\.json$/i,
-  /\.(?:cer|crt|der|key|kdbx|p12|pem|pfx)$/i
 ] as const
 
 const MAX_AUTHORING_VALIDATION_ATTEMPTS = 3
@@ -295,84 +220,6 @@ export const redactSensitiveText = ({
   return redacted
 }
 
-export const shouldCopyAuthoringPath = ({
-  source
-}: {
-  source: string
-}): boolean => {
-  const relativePath = basename(source)
-
-  return (
-    !AUTHORING_EXCLUDED_NAMES.has(relativePath) &&
-    !AUTHORING_EXCLUDED_PATTERNS.some((pattern) => pattern.test(relativePath))
-  )
-}
-
-export const createAuthoringEnv = ({
-  baseEnv,
-  pathPrefix
-}: {
-  baseEnv?: NodeJS.ProcessEnv
-  pathPrefix: string
-}): NodeJS.ProcessEnv => {
-  const sourceEnv = baseEnv ?? process.env
-  const env: NodeJS.ProcessEnv = {}
-
-  for (const [key, value] of Object.entries(sourceEnv)) {
-    if (
-      value !== undefined &&
-      (AUTHORING_ALLOWED_ENV_KEYS.has(key) ||
-        AUTHORING_ALLOWED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix)))
-    ) {
-      env[key] = value
-    }
-  }
-
-  for (const key of AUTHORING_STRIPPED_ENV_VARS) {
-    delete env[key]
-  }
-
-  env.PATH = `${pathPrefix}${process.platform === 'win32' ? ';' : ':'}${env.PATH ?? ''}`
-
-  return env
-}
-
-export const pinAuthoringAgentPreference = async ({
-  agent,
-  tempWorkspaceRoot
-}: {
-  agent: InitAuthorAgent
-  tempWorkspaceRoot: string
-}): Promise<void> => {
-  const configPath = join(tempWorkspaceRoot, '.bugscrub', 'bugscrub.config.yaml')
-  const configSource = await readFile(configPath, 'utf8')
-  const parsedConfig = parseYaml<AuthoringWorkspaceConfig>(configSource)
-
-  await writeTextFile({
-    path: configPath,
-    contents: stringifyYaml({
-      ...parsedConfig,
-      agent: {
-        ...parsedConfig.agent,
-        preferred: agent
-      }
-    })
-  })
-}
-
-export const syncAuthoredWorkspace = async ({
-  cwd,
-  tempWorkspaceRoot
-}: {
-  cwd: string
-  tempWorkspaceRoot: string
-}): Promise<string[]> => {
-  return syncBugscrubWorkspace({
-    cwd,
-    tempWorkspaceRoot
-  })
-}
-
 const validateAuthoredWorkspace = async ({
   env,
   tempWorkspaceRoot,
@@ -521,7 +368,7 @@ export const authorWorkspace = async ({
       )
 
       if (validationResult.exitCode === 0) {
-        const authoredFiles = await syncAuthoredWorkspace({
+        const authoredFiles = await syncBugscrubWorkspace({
           cwd,
           tempWorkspaceRoot: isolatedWorkspace.tempWorkspaceRoot
         })

@@ -107,6 +107,8 @@ export const runSetupRuntimeCommand = async ({
     command: 'docker'
   })
 
+  logger.info(`Preparing BugScrub runtime image "${containerImage}".`)
+
   if (!dockerInstalled) {
     throw new CliError({
       message: [
@@ -135,6 +137,7 @@ export const runSetupRuntimeCommand = async ({
   }
 
   if (!force) {
+    logger.info(`Checking whether "${containerImage}" already exists locally.`)
     const inspect = await runCommand({
       args: ['image', 'inspect', containerImage],
       command: 'docker',
@@ -150,10 +153,14 @@ export const runSetupRuntimeCommand = async ({
     }
   }
 
+  logger.info('Checking Docker Buildx availability.')
   await ensureDockerBuildx({
     env: sanitizedEnv
   })
 
+  logger.info(
+    `Building runtime image "${containerImage}" from ${dockerfilePath}. This can take a minute.`
+  )
   const build = await runCommand({
     args: [
       'buildx',

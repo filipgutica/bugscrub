@@ -1,4 +1,5 @@
-import { basename } from 'node:path'
+import { access, readFile } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 
 import { bugScrubConfigSchema } from '../schemas/config.schema.js'
 import type { BugScrubConfig } from '../types/index.js'
@@ -43,7 +44,115 @@ export const inferBaseUrl = ({
   }
 }
 
-export const buildInitConfig = ({
+type InitPackageManager = 'npm' | 'pnpm' | 'yarn'
+
+const inferPackageManager = async ({
+  packageRoot
+}: {
+  packageRoot: string
+}): Promise<InitPackageManager> => {
+  try {
+    const packageJson = JSON.parse(
+      await readFile(join(packageRoot, 'package.json'), 'utf8')
+    ) as { packageManager?: unknown }
+
+    if (typeof packageJson.packageManager === 'string') {
+      if (packageJson.packageManager.startsWith('pnpm@')) {
+        return 'pnpm'
+      }
+
+      if (packageJson.packageManager.startsWith('yarn@')) {
+        return 'yarn'
+      }
+
+      if (packageJson.packageManager.startsWith('npm@')) {
+        return 'npm'
+      }
+    }
+  } catch {
+    // Fall through to lockfile detection.
+  }
+
+  let currentRoot = packageRoot
+
+  while (true) {
+    for (const [fileName, manager] of [
+      ['pnpm-workspace.yaml', 'pnpm'],
+      ['pnpm-lock.yaml', 'pnpm'],
+      ['yarn.lock', 'yarn'],
+      ['package-lock.json', 'npm']
+    ] as const) {
+      try {
+        await access(join(currentRoot, fileName))
+        return manager
+      } catch {
+        // Keep checking.
+      }
+    }
+
+    const parentRoot = dirname(currentRoot)
+
+    if (parentRoot === currentRoot) {
+      break
+    }
+
+    currentRoot = parentRoot
+  }
+
+  return 'npm'
+}
+
+const buildLocalRuntime = async ({
+  framework,
+  packageRoot
+}: {
+  framework: 'next-app' | 'next-pages' | 'vite-react' | 'vite-vue' | 'vite' | 'unknown'
+  packageRoot: string
+}) => {
+  if (framework === 'unknown') {
+    return undefined
+  }
+
+  const packageManager = await inferPackageManager({
+    packageRoot
+  })
+  const installCommand =
+    packageManager === 'pnpm'
+      ? 'pnpm install --frozen-lockfile'
+      : packageManager === 'yarn'
+        ? 'yarn install --frozen-lockfile'
+        : 'npm install'
+
+  if (framework === 'next-app' || framework === 'next-pages') {
+    return {
+      cwd: '.',
+      installCommand,
+      readyPath: '/',
+      readyTimeoutMs: 120_000,
+      startCommand:
+        packageManager === 'pnpm'
+          ? 'pnpm dev --hostname 127.0.0.1 --port 3000'
+          : packageManager === 'yarn'
+            ? 'yarn dev --hostname 127.0.0.1 --port 3000'
+            : 'npm run dev -- --hostname 127.0.0.1 --port 3000'
+    }
+  }
+
+  return {
+    cwd: '.',
+    installCommand,
+    readyPath: '/',
+    readyTimeoutMs: 120_000,
+    startCommand:
+      packageManager === 'pnpm'
+        ? 'pnpm dev --host 127.0.0.1 --port 5173'
+        : packageManager === 'yarn'
+          ? 'yarn dev --host 127.0.0.1 --port 5173'
+          : 'npm run dev -- --host 127.0.0.1 --port 5173'
+  }
+}
+
+export const buildInitConfig = async ({
   framework,
   packageName,
   packageRoot
@@ -51,12 +160,16 @@ export const buildInitConfig = ({
   framework: 'next-app' | 'next-pages' | 'vite-react' | 'vite-vue' | 'vite' | 'unknown'
   packageName: string | undefined
   packageRoot: string
-}): {
+}): Promise<{
   config: BugScrubConfig
   usesPlaceholderBaseUrl: boolean
-} => {
+}> => {
   const baseUrl = inferBaseUrl({
     framework
+  })
+  const localRuntime = await buildLocalRuntime({
+    framework,
+    packageRoot
   })
 
   return {
@@ -79,7 +192,12 @@ export const buildInitConfig = ({
                 passwordEnvVar: 'BUGSCRUB_LOCAL_PASS'
               }
             }
-          }
+          },
+          ...(localRuntime
+            ? {
+                localRuntime
+              }
+            : {})
         }
       },
       agent: {

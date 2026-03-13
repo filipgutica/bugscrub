@@ -110,4 +110,118 @@ describe('createDisposableWorkspace', () => {
 
     await access(join(sessionRoot, 'agent-home', '.codex'))
   })
+
+  it('preserves the working-directory flag when building detached session args', () => {
+    const args = containerInternals.buildDetachedSessionArgs({
+      containerName: 'bugscrub-codex-session',
+      runArgs: [
+        'run',
+        '--rm',
+        '--init',
+        '-w',
+        '/Users/Test/Workspace',
+        '-e',
+        'HOME=/tmp/home',
+        'bugscrub-agent:latest',
+        'sh',
+        '-lc',
+        'sleep 1'
+      ]
+    })
+
+    expect(args).toEqual([
+      'run',
+      '-d',
+      '--name',
+      'bugscrub-codex-session',
+      '--rm',
+      '--init',
+      '-w',
+      '/Users/Test/Workspace',
+      '-e',
+      'HOME=/tmp/home',
+      'bugscrub-agent:latest',
+      'sh',
+      '-lc',
+      'sleep 1'
+    ])
+  })
+
+  it('treats codex chrome-devtools config backed by npx as needing reconfiguration', () => {
+    expect(
+      containerInternals.isChromeDevtoolsMcpConfigured({
+        agent: 'codex',
+        output: [
+          'chrome-devtools',
+          '  enabled: true',
+          '  transport: stdio',
+          '  command: npx',
+          '  args: chrome-devtools-mcp@latest',
+          '  cwd: -',
+          '  env: -'
+        ].join('\n')
+      })
+    ).toBe(false)
+  })
+
+  it('accepts codex chrome-devtools config backed by the image-local binary', () => {
+    expect(
+      containerInternals.isChromeDevtoolsMcpConfigured({
+        agent: 'codex',
+        output: [
+          'chrome-devtools',
+          '  enabled: true',
+          '  transport: stdio',
+          '  command: chrome-devtools-mcp',
+          '  args: -',
+          '  cwd: -',
+          '  env: -'
+        ].join('\n')
+      })
+    ).toBe(true)
+  })
+
+  it('treats claude chrome-devtools config backed by npx as needing reconfiguration', () => {
+    expect(
+      containerInternals.isChromeDevtoolsMcpConfigured({
+        agent: 'claude',
+        output: [
+          'chrome-devtools',
+          '  enabled: true',
+          '  transport: stdio',
+          '  command: npx',
+          '  args: chrome-devtools-mcp@latest',
+          '  cwd: -',
+          '  env: -'
+        ].join('\n')
+      })
+    ).toBe(false)
+  })
+
+  it('accepts claude chrome-devtools config backed by the image-local binary', () => {
+    expect(
+      containerInternals.isChromeDevtoolsMcpConfigured({
+        agent: 'claude',
+        output: [
+          'chrome-devtools',
+          '  enabled: true',
+          '  transport: stdio',
+          '  command: chrome-devtools-mcp',
+          '  args: -',
+          '  cwd: -',
+          '  env: -'
+        ].join('\n')
+      })
+    ).toBe(true)
+  })
+
+  it('builds a browser preflight script that targets the image-local Chrome wrapper', () => {
+    const script = containerInternals.buildChromeDevtoolsBrowserPreflightScript({
+      logPath: '/tmp/chrome-devtools-preflight.log'
+    })
+
+    expect(script).toContain('/opt/google/chrome/chrome')
+    expect(script).toContain('chrome-devtools-mcp')
+    expect(script).toContain('http://127.0.0.1:9222/json/version')
+  })
 })
